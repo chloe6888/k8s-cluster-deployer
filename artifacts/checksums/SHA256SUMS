@@ -1,0 +1,9 @@
+4cb83e7100a5e73fcb626207d0b5bcfd1294e26aeddfe075dcfb38f375c5f887  binaries/amd64/containerd/2.3.0/containerd-2.3.0-linux-amd64.tar.gz
+e81f6f999cce35ed998cf24b922855d37306bf2ff0e4c0df80492d82b0b58fd6  binaries/amd64/nerdctl/2.3.0/nerdctl-2.3.0-linux-amd64.tar.gz
+ac8a90f9e225bb9322189937b230cdc5478d5753f0e31e1bda98a5cf06bd9539  binaries/amd64/runc/1.4.2/runc.amd64
+df4cdd71677abe9ce903376cbcb2467784ddcf6b8952d8584bb58e5498b9646f  binaries/amd64/runc/1.4.2/runc.sha256sum
+bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35  manifests/calico/3.32.0/calico.yaml
+ff21430dcbdf12c09972331d12e9d20207dcc93249a4dcc6b8aad8f97209c2f1  manifests/envoy-gateway/1.7.1/envoy-gateway-install.yaml
+36b709409f76aca89041c8487ce510f227387332ce472955eea5172b5d9f2ab7  manifests/kyverno/1.18.0/kyverno-install.yaml
+84b4e102f2b65f5d69085f5816c29362b74641873d8ac3de996e5f86a8219176  manifests/metallb/0.15.3/metallb-native.yaml
+b4f45e635f29b0a8ba1727e6c1f503356d47943a14af8b4586d3e36350f82464  sources/mergerfs/2.40.2/mergerfs-2.40.2.tar.gz
