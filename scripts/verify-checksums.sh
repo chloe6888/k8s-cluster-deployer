@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../artifacts"
 
 if [ "${1:-}" = "--update" ]; then
-  find binaries sources keys manifests -type f ! -name .gitkeep | LC_ALL=C sort | xargs sha256sum > checksums/SHA256SUMS
+  find binaries sources keys manifests charts tools -type f ! -name .gitkeep | LC_ALL=C sort | xargs sha256sum > checksums/SHA256SUMS
   echo "已更新 artifacts/checksums/SHA256SUMS"
   exit 0
 fi
