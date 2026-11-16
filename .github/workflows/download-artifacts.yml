@@ -2,6 +2,9 @@ name: Download official deployment artifacts
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/download-artifacts.yml"
 
 permissions:
   contents: write
