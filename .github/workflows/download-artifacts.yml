@@ -1,0 +1,61 @@
+name: Download official deployment artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/tools/helm/3.22.1
+          curl -fsSL --retry 3 \
+            https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz \
+            -o artifacts/tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz
+          echo "896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea  artifacts/tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf artifacts/tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz
+          sudo install linux-amd64/helm /usr/local/bin/helm
+          helm version
+
+      - name: Download pinned binaries and manifests
+        run: bash scripts/download-artifacts.sh
+
+      - name: Download official Helm charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/charts/calico/3.32.0 artifacts/charts/metallb/0.15.3 artifacts/charts/envoy-gateway/1.7.1
+          helm repo add projectcalico https://docs.tigera.io/calico/charts
+          helm repo add metallb https://metallb.github.io/metallb
+          helm repo update
+          helm pull projectcalico/tigera-operator --version v3.32.0 --destination artifacts/charts/calico/3.32.0
+          helm pull metallb/metallb --version 0.15.3 --destination artifacts/charts/metallb/0.15.3
+          helm pull oci://docker.io/envoyproxy/gateway-helm --version v1.7.1 --destination artifacts/charts/envoy-gateway/1.7.1
+
+      - name: Generate and verify checksums
+        run: |
+          bash scripts/verify-checksums.sh --update
+          bash scripts/verify-checksums.sh
+
+      - name: Commit downloaded artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/checksums/SHA256SUMS artifacts/binaries artifacts/sources artifacts/keys artifacts/manifests artifacts/charts artifacts/tools
+          if git diff --cached --quiet; then
+            echo "No artifact changes to commit."
+            exit 0
+          fi
+          git commit -m "Add official offline deployment artifacts"
+          git push
