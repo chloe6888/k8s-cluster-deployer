@@ -2,8 +2,13 @@
 e81f6f999cce35ed998cf24b922855d37306bf2ff0e4c0df80492d82b0b58fd6  binaries/amd64/nerdctl/2.3.0/nerdctl-2.3.0-linux-amd64.tar.gz
 ac8a90f9e225bb9322189937b230cdc5478d5753f0e31e1bda98a5cf06bd9539  binaries/amd64/runc/1.4.2/runc.amd64
 df4cdd71677abe9ce903376cbcb2467784ddcf6b8952d8584bb58e5498b9646f  binaries/amd64/runc/1.4.2/runc.sha256sum
+7e968633c7d8b1de1e648a15fa838995bdbae285bdca9af9badd13156e360450  charts/calico/3.32.0/tigera-operator-v3.32.0.tgz
+66177e1546104dbe41b32b8c15e4351ef3f91f603f642153d8291d6808c9d2ad  charts/envoy-gateway/1.7.1/gateway-helm-v1.7.1.tgz
+27db761c5ad2525fd130c92fe2f2d4500f8870e402fefe3c9cb8d34d8a71a70c  charts/metallb/0.15.3/metallb-0.15.3.tgz
+7627818cf7bae52f9008c93e8b1f961f53dea11d40891778de216fb1b43be54d  keys/kubernetes/Release.key
 bccabc607685551db918f66da724893eca3e69a50c5a3e3077029b02dbab8d35  manifests/calico/3.32.0/calico.yaml
 ff21430dcbdf12c09972331d12e9d20207dcc93249a4dcc6b8aad8f97209c2f1  manifests/envoy-gateway/1.7.1/envoy-gateway-install.yaml
 36b709409f76aca89041c8487ce510f227387332ce472955eea5172b5d9f2ab7  manifests/kyverno/1.18.0/kyverno-install.yaml
 84b4e102f2b65f5d69085f5816c29362b74641873d8ac3de996e5f86a8219176  manifests/metallb/0.15.3/metallb-native.yaml
 b4f45e635f29b0a8ba1727e6c1f503356d47943a14af8b4586d3e36350f82464  sources/mergerfs/2.40.2/mergerfs-2.40.2.tar.gz
+896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea  tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz
