@@ -54,7 +54,7 @@
 
 ### 1.3 设计原则
 
-- 换集群只改 `/etc/k8s-deploy.env` 一个文件（2.2），本文不写死任何 IP/域名/密码。
+- 本文正文不写死 IP/域名/密码，一律以 `${变量名}` 引用，执行前按 2.2 清单在当前 shell 赋值；唯一例外是 6.0 变量块，直接写入本集群实际值。
 - 有官方 Helm Chart 的组件一律 chart 安装（Calico / MetalLB / Envoy Gateway），manifest 仅作离线兜底。
 - 离线分发三渠道：deb → 内网 apt 镜像站；二进制/chart/证书 → `${FILE_URL}`；镜像 → Harbor 公开项目。
 - 讨论过程与决策理由记录在仓库 `docs/DECISIONS.md`，本文只写结论与操作步骤。
@@ -63,7 +63,7 @@
 
 | 阶段 | 范围 | 章节 |
 |---|---|---|
-| 规划与准备 | 所有节点 | 2（变量文件、网段冲突检查、介质与镜像） |
+| 规划与准备 | 所有节点 | 2（变量清单、网段冲突检查、介质与镜像） |
 | 系统初始化 | 所有节点 | 5 |
 | 容器运行时 | 所有节点 | 7 |
 | 高可用入口 | master | 6（两个 VIP 可用后才能 init） |
@@ -89,59 +89,48 @@
 | `${CLUSTER_PREFIX}-k8s-worker11..1N` | 按集群填 | 按集群填 | containerd、kubeadm 套件 |
 | API VIP | 内网 VIP + 外网运维 VIP | — | keepalived 各自独立漂移 |
 
-### 2.2 集群变量文件（多集群复用的核心）
+### 2.2 集群变量清单（执行前按集群赋值）
 
-文档不写死任何域名/IP，统一引用 `/etc/k8s-deploy.env`；换集群只改这一个文件。每节点创建（每集群一份）：
+本文不写死任何域名/IP/密码，正文命令一律以 `${变量名}` 引用；执行任何一章命令前，先在当前 shell 把下表变量 export 赋值（换集群即换一组值）：
+
+| 变量 | 说明 / 默认值 |
+|---|---|
+| `CLUSTER_PREFIX` | 集群前缀 |
+| `NODE_IFACE` | 内网网卡名（集群流量统一走这块） |
+| `NODE_CIDR` | 内网网段，如 `10.0.0.0/24`；NodePort 仅在内网监听 |
+| `EXT_IFACE` | 外网网卡名（默认路由、对外入口） |
+| `NODE_IP` | 本节点内网 IP（取值命令见下；已过滤 keepalived 的 secondary/VIP 地址） |
+| `HARBOR` | 本集群 Harbor 域名 |
+| `REGISTRY` | 默认 `${HARBOR}/k8s_dmz`；系统镜像仓库项目（pause/calico/metallb/envoy/kubeadm 镜像） |
+| `APP_REGISTRY` | 业务镜像仓库（worker 预拉取用） |
+| `MIRROR` | 内网 apt 镜像站 |
+| `FILE_URL` | 默认 `${MIRROR}/repository/tmp-file/k8sv1.36`；安装文件目录（需自行上传，见 4.1） |
+| `HELM_VERSION` | 默认 `v3.22.1`；仅 master 与资源准备机 |
+| `VIP`、`VIP_PREFIX` | apiserver 内网 VIP（`NODE_CIDR` 内、未占用）、掩码长度（如 24） |
+| `EXT_VIP`、`EXT_VIP_PREFIX` | apiserver 外网运维 VIP、掩码长度 |
+| `EXT_API_ALLOWED_CIDR` | 允许访问外网 API VIP 的网段（不得 `0.0.0.0/0`） |
+| `VIP_PORT` | 默认 `16443`；内外 API VIP 同端口 |
+| `MASTER01_IP`～`MASTER03_IP` | 三台 master 内网 IP |
+| `KA_VRID`、`KA_EXT_VRID` | 默认 51、52；内/外网 VRRP ID（各自二层内唯一） |
+| `KA_AUTH_PASS` | keepalived 认证密码（≤8 位） |
+| `STATS_AUTH` | haproxy 统计页 `账号:密码`，必须改强密码 |
+| `POD_CIDR`、`SERVICE_CIDR` | 默认 `10.244.0.0/14`、`10.96.0.0/12` |
+| `IMAGE_LIST` | 默认 `/etc/k8s-preload-images.txt`；worker 预拉镜像清单（8.9 用） |
+| `METALLB_EXT_RANGE` | MetalLB 外网地址池（与节点外网 IP、EXT_VIP 避让） |
+| `GW_EXT_IP` | 入口 Gateway 固定外网 IP（须在 `METALLB_EXT_RANGE` 内） |
+| `NTP_SERVER` | 内网 NTP 服务器（5.7 chrony 用） |
+| `KA_STATE`、`KA_PRIORITY` | 仅 master 每台单独设置：master01=`MASTER`/100，master02=`BACKUP`/90，master03=`BACKUP`/80；worker 不设 |
+| `NODE_NAME` | 不入清单，执行前按节点单独 `export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01` 等 |
+
+本节点内网 IP 取值（每台节点、每个新 shell 执行一次）：
 
 ```bash
-cat > /etc/k8s-deploy.env << 'EOF'
-# ===== 本集群专属，部署前逐项确认 =====
-export CLUSTER_PREFIX=xxx                    # 集群前缀
-export NODE_IFACE=                           # 内网网卡名（集群流量统一走这块）
-export NODE_CIDR=                            # 内网网段，如 10.0.0.0/24；NodePort 仅在内网监听
-export EXT_IFACE=                            # 外网网卡名（默认路由、对外入口）
-# 本节点内网 IP：过滤 keepalived 加上的 secondary（VIP）地址
 export NODE_IP=$(ip -4 -o addr show dev ${NODE_IFACE} scope global | grep -v secondary | awk '{print $4}' | cut -d/ -f1 | head -n1)
-export HARBOR=                               # 本集群 Harbor 域名
-export REGISTRY=${HARBOR}/k8s_dmz            # 系统镜像仓库项目（pause/calico/metallb/envoy/kubeadm 镜像）
-export APP_REGISTRY=                         # 业务镜像仓库（worker 预拉取用）
-export MIRROR=                               # 内网 apt 镜像站
-export FILE_URL=${MIRROR}/repository/tmp-file/k8sv1.36   # 安装文件目录（需自行上传，见 4.1）
-export HELM_VERSION=v3.22.1                  # 仅 master 与资源准备机
-export VIP=                                  # apiserver 内网 VIP（NODE_CIDR 内、未占用）
-export VIP_PREFIX=                           # 内网 VIP 掩码长度，如 24
-export EXT_VIP=                              # apiserver 外网运维 VIP
-export EXT_VIP_PREFIX=                       # 外网 VIP 掩码长度
-export EXT_API_ALLOWED_CIDR=                 # 允许访问外网 API VIP 的网段（不得 0.0.0.0/0）
-export VIP_PORT=16443                        # 内外 API VIP 同端口
-export MASTER01_IP=                          # 三台 master 内网 IP
-export MASTER02_IP=
-export MASTER03_IP=
-export KA_VRID=51                            # 内网 VRRP ID（内网二层内唯一）
-export KA_EXT_VRID=52                        # 外网 VRRP ID（外网二层内唯一）
-export KA_AUTH_PASS=                         # keepalived 认证密码（≤8 位）
-export STATS_AUTH=admin:ChangeMe             # haproxy 统计页 账号:密码，必须改强密码
-export POD_CIDR=10.244.0.0/14
-export SERVICE_CIDR=10.96.0.0/12
-export IMAGE_LIST=/etc/k8s-preload-images.txt   # worker 预拉镜像清单（8.9 用）
-export METALLB_EXT_RANGE=                    # MetalLB 外网地址池（与节点外网 IP、EXT_VIP 避让）
-export GW_EXT_IP=                            # 入口 Gateway 固定外网 IP（须在 METALLB_EXT_RANGE 内）
-export NTP_SERVER=                           # 内网 NTP 服务器（5.7 chrony 用）
-# 仅 master 每台单独设置：master01=MASTER/100，master02=BACKUP/90，master03=BACKUP/80
-export KA_STATE=
-export KA_PRIORITY=
-EOF
-
-chmod 600 /etc/k8s-deploy.env          # 含密码
-source /etc/k8s-deploy.env             # 每个新终端都要 source
-echo 'source /etc/k8s-deploy.env' >> /root/.bashrc   # 可选：登录自动加载
 ```
 
-变量规则：
-- `NODE_NAME` 不进共享文件，执行前单独 `export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01` 等。
-- `KA_STATE`/`KA_PRIORITY` 每台 master 不同；worker 留空。
-- `NODE_IP` 每次 source 重算；5 章之后要确认它不是 VIP。
-- 后文所有 `${...}` 来自此文件；命令前先 `echo ${REGISTRY}` 等确认非空。
+- 含密码项（`KA_AUTH_PASS`/`STATS_AUTH`）建议放自管的权限受控文件（chmod 600）或部署平台注入，避免留在 shell history。
+- 命令前先 `echo ${REGISTRY}` 等抽查非空；`NODE_IP` 赋值后确认不是 VIP（2.5）。
+- 后文所有 `${...}` 均来自本表；第 6 章例外——6.0 变量块直接携带本集群实际值（与本表登记保持一致）。
 
 各集群取值登记表（部署前填好）：
 
@@ -155,7 +144,6 @@ echo 'source /etc/k8s-deploy.env' >> /root/.bashrc   # 可选：登录自动加�
 Pod/Service 网段必须与内网、外网、Harbor、镜像站、存储、运维网段互不重叠。`EXTRA_NETS` 填路由表看不到的网段：
 
 ```bash
-source /etc/k8s-deploy.env
 EXTRA_NETS="<Harbor网段> <存储网段> <运维网段>" python3 - <<'PY'
 import ipaddress, os, subprocess
 def nets(items):
@@ -210,13 +198,11 @@ PY
 | 入口 Gateway | 固定 `GW_EXT_IP` | 11.3 |
 | 存储 | 流量走内网，配置沿用现有方案 | 附录 A |
 
-每节点加载变量后先检查：
+每节点变量赋值后先检查：
 
 ```bash
-source /etc/k8s-deploy.env
 echo "${NODE_IFACE} ${NODE_IP} ${NODE_CIDR} ${EXT_IFACE}"    # 四项非空
-[ "${NODE_IP}" != "${VIP}" ] && [ "${NODE_IP}" != "${EXT_VIP}" ] || echo "NODE_IP 取到 VIP，请在 env 写死"
-stat -c '%a %n' /etc/k8s-deploy.env                          # 应为 600
+[ "${NODE_IP}" != "${VIP}" ] && [ "${NODE_IP}" != "${EXT_VIP}" ] || echo "NODE_IP 取到 VIP，请按节点手工指定"
 sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是 1
 ```
 
@@ -230,7 +216,7 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 |---|---|---|---|
 | 集群节点/管理网 | 内网 VIP | TCP 16443 | API（HAProxy 前端） |
 | 授权运维网段（仅） | 外网 VIP | TCP 16443 | 外部运维 API；其余来源必须拒绝 |
-| HAProxy（master） | 3 台 master 内网 IP | TCP 6443 | HAProxy → apiserver |
+| 所有节点与 Pod（内网） | 3 台 master 内网 IP | TCP 6443 | 直连 apiserver（in-cluster API 经 kube-proxy 直达 endpoints，不经 VIP；HAProxy 后端检查同端口） |
 | master ↔ master | master 内网 IP | TCP 2379–2380 | stacked etcd |
 | control plane | 所有节点 | TCP 10250 | kubelet API |
 | 所有节点 ↔（内网） | 所有节点 | TCP 179 | Calico BGP full-mesh |
@@ -238,11 +224,12 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 | calico 节点 | calico-typha | TCP 5473 | Typha（Operator 默认部署 2 副本） |
 | kube-apiserver | calico-apiserver | TCP 5443 | Calico 聚合 API（9.3 启用） |
 | keepalived 节点（内网二层） | VRRP peer | IP 协议 112（组播 224.0.0.18） | 内网 VIP |
-| keepalived 节点（外网二层） | VRRP peer | IP 协议 112 | 外网 VIP；**若二层禁组播改单播**（6.3 变体） |
+| keepalived 节点（外网二层） | VRRP peer | IP 协议 112 | 外网 VIP；**若二层禁组播改单播**（6.4 变体） |
 | 所有节点 ↔（内网） | 所有节点 | TCP/UDP 7946 | MetalLB speaker memberlist |
 | 运维机 | master 内网 IP | TCP 8888 | HAProxy 统计页（仅内网） |
 | 外网客户端 | `${GW_EXT_IP}` | TCP 80 | Envoy Gateway 业务入口 |
 | 外网 → 节点外网 IP | — | TCP/UDP 30000–32767 | **应拒绝**（NodePort 只在内网监听） |
+| 外部（除授权网段经外网 VIP） | master 外网 IP | TCP 6443 | **应拒绝**：apiserver 监听 0.0.0.0，直连绕过 HAProxy ACL（6.7） |
 | 节点 | Harbor / 镜像站 | TCP 443/80 | 镜像拉取、文件下载 |
 | 节点 | DNS / NTP | 53 / 123 | 解析、时间同步 |
 | 运维机 | 所有节点 | TCP 22 | SSH |
@@ -280,7 +267,6 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 检查命令：
 
 ```bash
-source /etc/k8s-deploy.env
 for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.sha256sum \
          nerdctl-2.3.0-linux-amd64.tar.gz helm-v3.22.1-linux-amd64.tar.gz \
          SHA256SUMS Release.key harbor-ca.crt \
@@ -345,7 +331,6 @@ nerdctl push ${REGISTRY}/pause:3.10.2
 ### 5.1 主机名、解析、内网路由与唯一性
 
 ```bash
-source /etc/k8s-deploy.env
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01    # 按本节点改
 hostnamectl set-hostname ${NODE_NAME}
 ```
@@ -527,7 +512,6 @@ ls -l /run/systemd/resolve/resolv.conf    # 正常则跳过；否则：
 证书、etcd、token 都依赖时钟一致；离线环境统一 chrony，指向内网 NTP 服务器（变量 `NTP_SERVER`，2.2）：
 
 ```bash
-source /etc/k8s-deploy.env
 
 apt install -y chrony       # 与 systemd-timesyncd 冲突，apt 自动卸载 timesyncd，属预期
 cat > /etc/chrony/chrony.conf <<EOF
@@ -573,100 +557,169 @@ journalctl --disk-usage
 
 ## 6. 高可用入口：keepalived + HAProxy（仅 master）
 
-3 台 master 均部署。两个 VRRP 实例**独立漂移**；HAProxy 两个 frontend 分别绑两个 VIP:16443，后端同为 3 台 master 内网:6443。
+3 台 master 均部署。两个 VRRP 实例独立漂移，HAProxy 的两个 frontend 分别绑内网 VIP 和外网 VIP 的 16443，后端同为 3 台 master 的 6443。
 
-先通过 2.5 的通用检查，再确认本章专属变量——任何一项为空或告警，先改 env 再继续：
+第 6 章不依赖任何外部变量文件。所有参数集中在 6.0 的一个变量块里，**每台 master 在同一个终端里先粘贴这个块**，后面的命令直接引用这些 shell 变量。换了终端或重连后，需要重新粘贴 6.0。
+
+### 6.0 变量块（每台都要粘贴，前半部分三台相同，后半部分按节点改）
 
 ```bash
-source /etc/k8s-deploy.env
-echo "${VIP} ${VIP_PREFIX} ${EXT_VIP} ${EXT_VIP_PREFIX} ${EXT_API_ALLOWED_CIDR} ${VIP_PORT}"
-echo "${KA_STATE} ${KA_PRIORITY} ${KA_VRID} ${KA_EXT_VRID}"
-echo "${MASTER01_IP} ${MASTER02_IP} ${MASTER03_IP}"
-[ "${STATS_AUTH}" != "admin:ChangeMe" ] || echo "STATS_AUTH 是默认值，必须改强密码"
+# ===== 三台相同的部分 =====
+CLUSTER_PREFIX=xxx                  # 集群前缀，用于 HAProxy 后端名称
+NODE_IFACE=vlan1514                 # 内网网卡名（请核对）
+EXT_IFACE=vlan1254                  # 外网网卡名（请核对）
+VIP=10.144.67.200                   # 内网 API VIP
+VIP_PREFIX=24
+EXT_VIP=10.144.71.200               # 外网运维 VIP
+EXT_VIP_PREFIX=24
+VIP_PORT=16443
+EXT_API_ALLOWED_CIDR=               # 允许访问外网 VIP 的运维网段，不得 0.0.0.0/0
+MASTER01_IP=10.144.67.1
+MASTER02_IP=10.144.67.2
+MASTER03_IP=10.144.67.3
+KA_VRID=51                          # 内网 VRRP ID，二层内唯一
+KA_EXT_VRID=52                      # 外网 VRRP ID，二层内唯一
+KA_AUTH_PASS=                       # ≤8 位，三台相同
+STATS_AUTH=admin:                   # 账号:强密码，三台相同
+
+# ===== 按节点修改：只保留本机对应的一行，其余注释 =====
+NODE_IP=10.144.67.1;  KA_STATE=MASTER; KA_PRIORITY=100      # master01
+# NODE_IP=10.144.67.2;  KA_STATE=BACKUP; KA_PRIORITY=90     # master02
+# NODE_IP=10.144.67.3;  KA_STATE=BACKUP; KA_PRIORITY=80     # master03
+
+# ===== 检查 =====
+echo "本机 ${NODE_IP}  ${KA_STATE}/${KA_PRIORITY}"
+echo "VIP=${VIP}/${VIP_PREFIX}  EXT_VIP=${EXT_VIP}/${EXT_VIP_PREFIX}  PORT=${VIP_PORT}"
+echo "NODE_IFACE=${NODE_IFACE}  EXT_IFACE=${EXT_IFACE}  ALLOWED=${EXT_API_ALLOWED_CIDR}"
+[ -n "${EXT_API_ALLOWED_CIDR}" ] && [ "${EXT_API_ALLOWED_CIDR}" != "0.0.0.0/0" ] || echo "EXT_API_ALLOWED_CIDR 为空或 0.0.0.0/0，必须填写"
+[ -n "${STATS_AUTH#*:}" ] && [ "${STATS_AUTH}" != "admin:ChangeMe" ] || echo "STATS_AUTH 未设置强密码"
 [ "${#KA_AUTH_PASS}" -ge 1 ] && [ "${#KA_AUTH_PASS}" -le 8 ] || echo "KA_AUTH_PASS 为空或超 8 位"
+ip -4 -o addr show dev ${NODE_IFACE} | grep -q " ${NODE_IP}/" || echo "NODE_IP 不在 ${NODE_IFACE} 上，请核对"
+[ "$(sysctl -n net.ipv4.ip_nonlocal_bind)" = 1 ] || echo "ip_nonlocal_bind 未生效，HAProxy 绑 VIP 会失败（见 5.2）"
 ```
 
-### 6.1 安装与 HAProxy 配置
+对照表（三台只有这一处不同）：
+
+| 节点 | NODE_IP | KA_STATE | KA_PRIORITY |
+|---|---|---|---|
+| master01 | 10.144.67.1 | `MASTER` | `100` |
+| master02 | 10.144.67.2 | `BACKUP` | `90` |
+| master03 | 10.144.67.3 | `BACKUP` | `80` |
+
+内网 IP 取自原 HAProxy 配置的后端地址，网卡名根据原 keepalived 配置推断（内网 vlan1514、外网 vlan1254），请核对。VRID 二层内必须唯一，可抓包确认 51/52 没被占用：
+
+```bash
+timeout 10 tcpdump -ni ${NODE_IFACE} vrrp 2>/dev/null | head
+```
+
+### 6.1 安装软件包
 
 ```bash
 apt install -y keepalived haproxy
-source /etc/k8s-deploy.env
-
-cat > /etc/haproxy/haproxy.cfg <<EOF
-global
-    log /dev/log local0
-    log /dev/log local1 notice
-    chroot /var/lib/haproxy
-    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
-    stats timeout 30s
-    user haproxy
-    group haproxy
-    daemon
-
-defaults
-    log global
-    mode tcp
-    option tcplog
-    option dontlognull
-    timeout connect 5s
-    timeout client 3600s
-    timeout server 3600s
-    timeout tunnel 3600s
-
-frontend kube-apiserver-internal
-    bind ${VIP}:${VIP_PORT}
-    default_backend kube-apiserver-backend
-
-frontend kube-apiserver-external-ops
-    bind ${EXT_VIP}:${VIP_PORT}
-    tcp-request connection reject if !{ src ${EXT_API_ALLOWED_CIDR} }
-    default_backend kube-apiserver-backend
-
-backend kube-apiserver-backend
-    balance roundrobin
-    # /healthz 匿名可访问（system:public-info-viewer），HTTP 层检查比 TCP 更真实；
-    # 若日后关闭 --anonymous-auth，请整体换回 "option ssl-hello-chk" 并删除下面三行 httpchk
-    option httpchk GET /healthz
-    http-check connect ssl verify none
-    http-check expect status 200
-    default-server inter 2s fall 3 rise 2
-    server master01 ${MASTER01_IP}:6443 check
-    server master02 ${MASTER02_IP}:6443 check
-    server master03 ${MASTER03_IP}:6443 check
-
-listen stats
-    mode http
-    bind ${NODE_IP}:8888
-    stats auth ${STATS_AUTH}
-    stats refresh 5s
-    stats uri /stats
-EOF
-
-haproxy -c -f /etc/haproxy/haproxy.cfg
+systemctl stop keepalived haproxy 2>/dev/null     # 配置完成前先不启动
 ```
 
-### 6.2 健康检查脚本
-
-端口写死进脚本，运行时不 source env（每 2 秒执行一次，避免重算 NODE_IP 且 env 含密码）：
+### 6.2 HAProxy 配置（三台完全一致）
 
 ```bash
-source /etc/k8s-deploy.env
+cat > /etc/haproxy/haproxy.cfg <<EOF
+global
+        log /dev/log    local0
+        log /dev/log    local1 notice
+        chroot /var/lib/haproxy
+        stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+        stats timeout 30s
+        user haproxy
+        group haproxy
+        daemon
+        maxconn 20000
+
+defaults
+        log     global
+        mode    tcp
+        option  tcplog
+        option  dontlognull
+        timeout connect 5000
+        timeout client  3600s
+        timeout server  3600s
+        timeout tunnel  3600s
+
+# 内网入口：kubeadm 的 controlPlaneEndpoint
+frontend kube-apiserver
+        mode  tcp
+        bind  ${VIP}:${VIP_PORT}
+        default_backend  kube-apiserver-backend
+
+# 外网运维入口：仅授权网段
+frontend kube-apiserver-ext
+        mode  tcp
+        bind  ${EXT_VIP}:${VIP_PORT}
+        tcp-request connection reject if !{ src ${EXT_API_ALLOWED_CIDR} }
+        default_backend  kube-apiserver-backend
+
+# 统计页：只监听本机内网 IP
+listen stats
+        mode    http
+        option  httplog
+        bind    ${NODE_IP}:8888
+        stats auth    ${STATS_AUTH}
+        stats refresh    5s
+        stats realm    HAproxy\ Statistics
+        stats uri   /stats
+
+backend kube-apiserver-backend
+        mode        tcp
+        balance     roundrobin
+        # /readyz 在 apiserver 优雅停止时先失败，能提前摘除；匿名可访问
+        # 若日后关闭 --anonymous-auth，删除下面两行 http 检查，server 行只保留 check
+        option      httpchk GET /readyz
+        http-check  expect status 200
+        default-server inter 2s fall 3 rise 2
+        server ${CLUSTER_PREFIX}-k8s-master01 ${MASTER01_IP}:6443 check check-ssl verify none
+        server ${CLUSTER_PREFIX}-k8s-master02 ${MASTER02_IP}:6443 check check-ssl verify none
+        server ${CLUSTER_PREFIX}-k8s-master03 ${MASTER03_IP}:6443 check check-ssl verify none
+EOF
+
+chown root:haproxy /etc/haproxy/haproxy.cfg
+chmod 640 /etc/haproxy/haproxy.cfg      # 含 stats 密码
+haproxy -c -f /etc/haproxy/haproxy.cfg  # 必须显示 Configuration file is valid
+```
+
+只有 `bind ${NODE_IP}:8888` 一行因本机 IP 而不同，其余三台一致。
+
+### 6.3 健康检查脚本（三台完全一致）
+
+端口直接写进脚本，运行时不依赖任何变量：
+
+```bash
 cat > /etc/keepalived/check-haproxy.sh <<EOF
 #!/bin/bash
-pgrep -x haproxy >/dev/null || exit 1
-ss -lntH "sport = :${VIP_PORT}" | grep -q . || exit 1
+err=0
+for k in \$(seq 1 3); do
+    if pgrep -x haproxy >/dev/null && ss -lntH "sport = :${VIP_PORT}" | grep -q .; then
+        err=0
+        break
+    fi
+    err=\$((err + 1))
+    sleep 1
+done
+
+if [ "\$err" != "0" ]; then
+    logger -t check-haproxy "haproxy 异常，停止 keepalived 以迁移 VIP"
+    /usr/bin/systemctl stop keepalived
+    exit 1
+fi
 exit 0
 EOF
 chmod 755 /etc/keepalived/check-haproxy.sh
-cat /etc/keepalived/check-haproxy.sh     # 确认端口已是数字，不是空值
+cat /etc/keepalived/check-haproxy.sh      # 确认端口已展开为数字
 ```
 
-### 6.3 keepalived 配置（内外 VIP 独立漂移）
+脚本在 HAProxy 异常时会 `stop keepalived`，两个 VIP 一起迁走，**不会自动恢复**。HAProxy 修好后要人工 `systemctl start keepalived`，写进运维手册。
 
-master01 = `MASTER/100`，master02 = `BACKUP/90`，master03 = `BACKUP/80`：
+### 6.4 keepalived 配置
 
 ```bash
-source /etc/k8s-deploy.env
 cat > /etc/keepalived/keepalived.conf <<EOF
 global_defs {
     router_id $(hostname)
@@ -674,47 +727,53 @@ global_defs {
     enable_script_security
 }
 
-vrrp_script checkhaproxy {
+vrrp_script checkhaproxy
+{
     script "/etc/keepalived/check-haproxy.sh"
     interval 2
-    timeout 3
+    timeout 5
     weight -30
-    fall 2
+    fall 1
     rise 1
-    init_fail
 }
 
-vrrp_instance VI_API_INTERNAL {
+vrrp_instance VI_INTERNAL {
     state ${KA_STATE}
     interface ${NODE_IFACE}
     virtual_router_id ${KA_VRID}
     priority ${KA_PRIORITY}
     advert_int 1
+
+    virtual_ipaddress {
+        ${VIP}/${VIP_PREFIX} dev ${NODE_IFACE} label ${NODE_IFACE}:${KA_VRID}
+    }
+
     authentication {
         auth_type PASS
         auth_pass ${KA_AUTH_PASS}
     }
-    virtual_ipaddress {
-        ${VIP}/${VIP_PREFIX} dev ${NODE_IFACE}
-    }
+
     track_script {
         checkhaproxy
     }
 }
 
-vrrp_instance VI_API_EXTERNAL {
+vrrp_instance VI_EXTERNAL {
     state ${KA_STATE}
     interface ${EXT_IFACE}
     virtual_router_id ${KA_EXT_VRID}
     priority ${KA_PRIORITY}
     advert_int 1
+
+    virtual_ipaddress {
+        ${EXT_VIP}/${EXT_VIP_PREFIX} dev ${EXT_IFACE} label ${EXT_IFACE}:${KA_EXT_VRID}
+    }
+
     authentication {
         auth_type PASS
         auth_pass ${KA_AUTH_PASS}
     }
-    virtual_ipaddress {
-        ${EXT_VIP}/${EXT_VIP_PREFIX} dev ${EXT_IFACE}
-    }
+
     track_script {
         checkhaproxy
     }
@@ -723,28 +782,85 @@ EOF
 
 chmod 600 /etc/keepalived/keepalived.conf
 keepalived -t -f /etc/keepalived/keepalived.conf
-systemctl enable --now haproxy keepalived
+grep -E 'router_id|state|priority' /etc/keepalived/keepalived.conf    # 核对本机取值
+```
+
+要点：
+
+- 两个实例共用检查脚本：HAProxy 死亡时两个 VIP 一起迁移，可能落到不同 master，属预期。
+- `weight -30` 与 100/90/80 配合：任一台降 30 后（70/60/50）会低于至少一台存活节点的原优先级，VIP 才会迁走。调整间距时重新核算。
+- 默认抢占开启，master01 恢复后抢回 VIP，不需要写 `preempt`。
+- label 最长 15 个字符，网卡名较长时会被截断，超长就删掉 `label` 参数。
+- **单播变体（内外任一二层禁组播时）**：在对应的 `vrrp_instance` 里加入下面两项，并要求网络侧放通 IP 协议 112。内网实例用三台内网 IP，外网实例用三台外网 IP，每台填自己的值：
+
+```
+    unicast_src_ip <本机该网卡 IP>
+    unicast_peer {
+        <另外两台该网卡 IP，每行一个>
+    }
+```
+
+### 6.5 启动顺序与 systemd 依赖
+
+给 keepalived 加启动顺序依赖，避免开机时 HAProxy 还没起来，检查脚本就把 keepalived 停掉：
+
+```bash
+mkdir -p /etc/systemd/system/keepalived.service.d
+cat > /etc/systemd/system/keepalived.service.d/10-after-haproxy.conf <<'EOF'
+[Unit]
+After=haproxy.service
+Wants=haproxy.service
+EOF
+systemctl daemon-reload
+```
+
+启动顺序：
+
+```bash
+# 1. 三台 master 分别执行
+systemctl enable --now haproxy
+ss -lntp | grep haproxy               # 应看到 ${VIP}:${VIP_PORT}、${EXT_VIP}:${VIP_PORT}、本机:8888
+
+# 2. 先在 master01 启动 keepalived，确认两个 VIP 都在它身上
+systemctl enable --now keepalived
+
+# 3. 再依次在 master02、master03 启动
+systemctl enable --now keepalived
+
 apt-mark hold keepalived haproxy
 ```
 
-- 两实例共用检查脚本：HAProxy 死亡时两个 VIP 一起迁移（可能落到不同 master，预期行为）；仅外网层故障时只有外网 VIP 迁移。
-- `weight -30` 与 100/90/80 配合（100-30=70 < 90 才会迁移）；调整优先级间距时重新核算。
-- 默认抢占开启：master01 恢复后 VIP 抢回，上线前在测试环境验证（附录 B）。
-- **单播变体（若内外任一二层禁组播）**：两实例分别添加
-  `unicast_src_ip <本机该网卡IP>` 与 `unicast_peer { <另外两台该网卡IP> }`，并要求网络侧放通 IP 协议 112。是否需要以网络确认为准（附录 B.1）。
-
-### 6.4 验证（init 前必须通过）
+### 6.6 验证（init 前必须通过）
 
 ```bash
-source /etc/k8s-deploy.env
-ip -4 addr show dev ${NODE_IFACE} | grep ${VIP}      # 持有者可见
+# ① VIP 持有者（此时只有 master01 有输出）
+ip -4 addr show dev ${NODE_IFACE} | grep ${VIP}
 ip -4 addr show dev ${EXT_IFACE} | grep ${EXT_VIP}
-ss -lntp | grep -E "${VIP_PORT}|8888"                # HAProxy 绑两个 VIP；stats 仅内网 IP
 
-# 漂移演练：在持有节点 systemctl stop haproxy，两个 VIP 应迁移（可落不同 master）；恢复后 start
+# ② 监听
+ss -lntp | grep -E "${VIP_PORT}|8888"
+
+# ③ keepalived 状态
+systemctl status keepalived --no-pager | head -n 12
+journalctl -u keepalived --since '10 min ago' --no-pager | grep -iE 'MASTER|BACKUP|FAULT|error'
+
+# ④ HAProxy 后端状态（init 前三台后端全 DOWN 属正常，init 后应全部 UP）
+curl -su "${STATS_AUTH}" "http://${NODE_IP}:8888/stats;csv" | cut -d, -f1,2,18 | grep -E 'kube-apiserver|BACKEND'
 ```
 
-从授权网段测外网 VIP:16443 可连，非授权网段必须拒绝。此时后端 6443 未起、健康检查全失败属正常——先确认 VIP 漂移与监听，再 init。外网网卡异常场景（down 外网卡仅外网 VIP 迁移）在测试环境验证，不要在生产直接 down。
+**漂移演练**（在持有 VIP 的节点执行，先在测试环境做）：
+
+1. `systemctl stop haproxy`：几秒内两个 VIP 应迁到其他 master，原节点的 keepalived 被脚本停掉。
+2. 恢复：`systemctl start haproxy && systemctl start keepalived`，master01 应抢回 VIP。
+3. 整机重启一台 master：开机后 keepalived 与 HAProxy 应自动起来，VIP 状态正常。
+
+**访问控制验证**：从授权网段测 `nc -zv ${EXT_VIP} ${VIP_PORT}` 可连，非授权网段必须被拒绝。外网网卡异常场景（down 外网网卡，仅外网 VIP 应迁移）在测试环境验证，不要在生产直接操作。
+
+此时后端 6443 尚未启动，健康检查全部失败属正常。先确认 VIP 漂移和监听都对，再到 master01 执行 `kubeadm init`。
+
+### 6.7 遗留风险
+
+6443 仍然监听所有地址，外网 master IP:6443 能绕过 HAProxy 的 ACL，需要用节点 nft 过滤或网络侧 ACL 关掉；第 3 章防火墙表已补"所有节点与 Pod → 3 台 master 内网 IP 的 TCP 6443"一行。
 
 ---
 
@@ -753,7 +869,6 @@ ss -lntp | grep -E "${VIP_PORT}|8888"                # HAProxy 绑两个 VIP；s
 ### 7.1 安装 containerd 2.3.0
 
 ```bash
-source /etc/k8s-deploy.env
 mkdir -p /data/package && cd /data/package
 wget ${FILE_URL}/SHA256SUMS
 wget ${FILE_URL}/containerd-2.3.0-linux-amd64.tar.gz
@@ -775,7 +890,6 @@ systemctl daemon-reload && systemctl enable --now containerd
 ### 7.2 config.toml 关键项与 Harbor 访问
 
 ```bash
-source /etc/k8s-deploy.env
 # ① sandbox 镜像 → Harbor（sed 按镜像字符串替换，不依赖键名；
 #    2.x 的 version 3 配置里可能位于 pinned_images.sandbox，grep 确认即可）
 sed -i -E "s#[a-zA-Z0-9._:/-]+/pause:[0-9.]+#${REGISTRY}/pause:3.10.2#g" /etc/containerd/config.toml
@@ -808,7 +922,6 @@ EOF
 ### 7.3 安装 runc 1.4.2
 
 ```bash
-source /etc/k8s-deploy.env
 cd /data/package
 wget ${FILE_URL}/runc.amd64 ${FILE_URL}/runc.sha256sum
 grep ' runc.amd64$' runc.sha256sum | sha256sum -c -     # 对照上游官方清单
@@ -838,7 +951,6 @@ nerdctl --namespace k8s.io pull ${REGISTRY}/pause:3.10.2   # 顺带验证 Harbor
 签名公钥来自内网站，信任链只靠镜像站，安装前必须核对指纹（与 4.1 上传记录、官方发布页一致）：
 
 ```bash
-source /etc/k8s-deploy.env
 mkdir -p /etc/apt/keyrings
 curl -fsSL ${FILE_URL}/Release.key -o /tmp/Release.key
 sha256sum /tmp/Release.key                     # 与上传记录比对
@@ -876,7 +988,6 @@ crictl info | head    # crictl 与 nerdctl -n k8s.io 看到同一命名空间，
 ### 8.3 确认初始化镜像
 
 ```bash
-source /etc/k8s-deploy.env
 kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}
 # 每一条都必须已存在于 Harbor；pause 版本应与 7.2 一致
 crictl pull ${REGISTRY}/pause:3.10.2    # 验证 7.2 Harbor 访问已生效
@@ -960,7 +1071,6 @@ EOF
 
 ```bash
 command -v envsubst || apt install -y gettext-base
-source /etc/k8s-deploy.env
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01
 envsubst '${NODE_NAME} ${NODE_IP} ${REGISTRY} ${VIP} ${EXT_VIP} ${VIP_PORT} ${POD_CIDR} ${SERVICE_CIDR} ${NODE_CIDR} ${MASTER01_IP} ${MASTER02_IP} ${MASTER03_IP}' \
   < kubeadm-config.yaml.tpl > kubeadm-config.yaml
@@ -995,7 +1105,6 @@ ss -lntp | grep -E ':(6443|2379|2380|10250)'
 ### 8.7 安装 Helm（master）
 
 ```bash
-source /etc/k8s-deploy.env
 cd /data/package
 wget ${FILE_URL}/helm-${HELM_VERSION}-linux-amd64.tar.gz
 grep "helm-${HELM_VERSION}-linux-amd64.tar.gz\$" SHA256SUMS | sha256sum -c -
@@ -1018,7 +1127,6 @@ kubeadm token create --print-join-command          # token + hash
 在 master02 / master03 分别执行（确认 8.1 的 `/etc/default/kubelet` 已写好）：
 
 ```bash
-source /etc/k8s-deploy.env
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-master02     # master03 相应改
 kubeadm join ${VIP}:${VIP_PORT} \
   --token <token> --discovery-token-ca-cert-hash sha256:<hash> \
@@ -1038,7 +1146,6 @@ kubeadm certs check-expiration       # 同为约 10 年
 kubeadm token create --print-join-command
 
 # 每台 worker（确认 5/7 章与 8.1 已完成）
-source /etc/k8s-deploy.env
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-worker11    # 按节点改
 kubeadm join ${VIP}:${VIP_PORT} \
   --token <token> --discovery-token-ca-cert-hash sha256:<hash> \
@@ -1078,7 +1185,6 @@ helm pull projectcalico/tigera-operator --version v3.32.0 --destination ./charts
 ### 9.2 安装 CRD Chart
 
 ```bash
-source /etc/k8s-deploy.env
 mkdir -p /data/package/charts && cd /data/package/charts
 wget ${FILE_URL}/crd.projectcalico.org.v1-v3.32.0.tgz ${FILE_URL}/tigera-operator-v3.32.0.tgz
 grep 'crd.projectcalico.org.v1-v3.32.0.tgz$' ../SHA256SUMS | sha256sum -c -
@@ -1094,7 +1200,6 @@ kubectl create namespace tigera-operator --dry-run=client -o yaml | kubectl appl
 ### 9.3 values 与镜像核对（强制）
 
 ```bash
-source /etc/k8s-deploy.env
 cat > calico-values.yaml <<EOF
 manageCRDs: false                     # CRD 已由 9.2 提供，operator 不再自装
 installation:
@@ -1169,7 +1274,6 @@ kubectl get nodes -o wide                     # 节点 IP 均为内网 IP
 L2 模式无必改功能项（`crds.enabled` 默认 true，CRD 随 chart 安装）；speaker 自带 FRR sidecar（0.15 起与 speaker 同 Pod、不可关闭），离线只需把三处镜像指向内网：
 
 ```bash
-source /etc/k8s-deploy.env
 # 资源准备机：helm repo add metallb https://metallb.github.io/metallb && helm repo update
 #   helm pull metallb/metallb --version 0.15.3 → 上传 ${FILE_URL}
 cat > metallb-values.yaml <<EOF
@@ -1188,7 +1292,6 @@ EOF
 ### 10.2 安装（speaker 需特权，PSA 放行）
 
 ```bash
-source /etc/k8s-deploy.env
 cd /data/package/charts
 wget ${FILE_URL}/metallb-0.15.3.tgz
 grep 'metallb-0.15.3.tgz$' ../SHA256SUMS | sha256sum -c -
@@ -1213,7 +1316,6 @@ release 名 `metallb` 时资源名为 `metallb-controller`/`metallb-speaker`；r
 `autoAssign: false`：只有显式指定 pool-ext 的 Service 才用池内地址，防止误占入口 IP。`${METALLB_EXT_RANGE}` 必须在外网网卡二层段内且未被占用：
 
 ```bash
-source /etc/k8s-deploy.env
 cat > metallb-pool.yaml <<EOF
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
@@ -1251,7 +1353,6 @@ nftables 模式无需 strictARP 设置；同一 Service 入口流量只落一台
 chart 单键 `global.imageRegistry` 同时覆盖控制面与 certgen Job；数据面镜像不在 chart 内，由 EnvoyProxy 资源指定（11.3）：
 
 ```bash
-source /etc/k8s-deploy.env
 cd /data/package/charts
 wget ${FILE_URL}/gateway-helm-v1.7.1.tgz
 grep 'gateway-helm-v1.7.1.tgz$' ../SHA256SUMS | sha256sum -c -
@@ -1277,7 +1378,6 @@ kubectl wait --timeout=5m -n envoy-gateway-system deployment/envoy-gateway --for
 ### 11.3 EnvoyProxy + GatewayClass
 
 ```bash
-source /etc/k8s-deploy.env
 cat > envoy-gatewayclass.yaml <<EOF
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
@@ -1402,7 +1502,7 @@ kubectl delete pod net-a net-b
 
 ### B. 待验证事项清单（完成前本文不等同于最终生产手册）
 
-环境参数类：各集群登记表（2.2）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 6.3 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`NTP_SERVER`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
+环境参数类：各集群登记表（2.2）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 6.4 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`NTP_SERVER`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
 
 版本与网络实测类：
 - kubeadm v1beta4 证书有效期字段在 1.36.6 的实际生效（`certs check-expiration`）。
