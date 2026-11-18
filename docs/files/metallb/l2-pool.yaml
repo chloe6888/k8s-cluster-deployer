@@ -1,0 +1,31 @@
+# MetalLB 外网地址池（对应部署文档 10.3，展开后即 metallb-pool.yaml）
+# 前提：metallb 0.15.3 已按文档 10.1–10.2 用 helm 安装（L2、关 FRR、PSA privileged）
+#
+# 要点：
+# - autoAssign: false —— 只有显式指定 pool-ext 的 Service 才用池内地址
+#   （如 Envoy Gateway 的 LoadBalancer），防止误占入口 IP。
+# - ${METALLB_EXT_RANGE} 必须在外网网卡二层段内，且与节点外网 IP、
+#   ${EXT_VIP}（keepalived）、DHCP 可分配范围避让。
+# - interfaces 限定只在外网网卡通告（双网卡防误通告内网）。
+# - L2 依赖免费 ARP；同一 Service 入口流量只落一台 leader 节点，
+#   将来需多节点分摊再加 BGP 池（与 L2 池可共存）。
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: pool-ext
+  namespace: metallb-system
+spec:
+  addresses:
+    - ${METALLB_EXT_RANGE}      # 例：192.0.2.100-192.0.2.120
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: l2-ext
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - pool-ext
+  interfaces:
+    - ${EXT_IFACE}

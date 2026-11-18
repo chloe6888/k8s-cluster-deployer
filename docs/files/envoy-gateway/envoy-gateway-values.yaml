@@ -1,0 +1,15 @@
+# Envoy Gateway 1.7.1 Helm values（对应部署文档 11.1）
+# 安装：helm upgrade --install eg ./gateway-helm-v1.7.1.tgz \
+#         --namespace envoy-gateway-system --create-namespace -f envoy-gateway-values.yaml
+#
+# 只覆盖控制面镜像；数据面 envoy 镜像由 EnvoyProxy 资源指定（envoy-gatewayclass.yaml）。
+# 键名以 helm show values ./gateway-helm-v1.7.1.tgz 为准。
+#
+# 安装前强制核对（渲染出的每一个镜像——控制面、certgen Job、shutdown-manager 等
+# 都必须指向 ${REGISTRY} 且已在 Harbor；数据面 envoy 不在此渲染中，单独确认）：
+#   helm template eg ./gateway-helm-v1.7.1.tgz -n envoy-gateway-system \
+#     -f envoy-gateway-values.yaml | grep -E 'image:' | sort -u
+global:
+  images:
+    envoyGateway:
+      image: ${REGISTRY}/envoyproxy/gateway:v1.7.1

@@ -1,0 +1,11 @@
+# MetalLB 0.15.3 Helm values（对应部署文档 10.1）
+# 安装：helm upgrade --install metallb ./metallb-0.15.3.tgz -n metallb-system -f metallb-values.yaml
+#
+# L2 模式不需要 FRR：两个字段均关闭（键名以 helm show values ./metallb-0.15.3.tgz 为准，待验证）。
+# 镜像不在 values 中改写：controller/speaker 镜像由 chart 部署后按文档 10.2
+# 的 helm template | grep image: 核对并推入 ${REGISTRY}/metallb/。
+frrk8s:
+  enabled: false
+speaker:
+  frr:
+    enabled: false
