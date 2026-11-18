@@ -30,6 +30,7 @@ Kubernetes 1.36.6 离线高可用集群 —— 讨论阶段结论汇总。
 | 23 | 主文档 | **以本地《Kubernetes-1.36.6-离线高可用部署文档.md》为主文档**（2026-11-18 确认）；《v1.36.6 集群部署方案（评审定稿 2026-11-16）》内容全部并入后作废；v1.26.3 手册仅第 12 章排障经验并入附录 C |
 | 24 | CI 补充 | workflow `download-artifacts.yml` 增加 Calico CRD Chart 拉取（`helm pull projectcalico/crd.projectcalico.org.v1 --version v3.32.0`）；Kyverno 下载行删除 |
 | 25 | 校验文件 | 离线包统一以仓库 `artifacts/checksums/SHA256SUMS` 为校验清单，`package-offline.sh` 拷贝时把仓库相对路径展平为文件名（2026-11-18）；runc 额外对照上游 `runc.sha256sum`；不逐文件另造校验附件名 |
+| 26 | inotify 调优 | `fs.inotify.max_user_instances=8192`、`max_user_watches=1048576`、`max_queued_events=65536` 写入 `/etc/sysctl.d/k8s.conf`（5.2，2026-11-18 用户指定）；其余调优（nf_conntrack_max 等）仍保持默认 |
 
 ## 尚未填写的占位符（部署前必须确认，见主文档 §2.2 登记表）
 

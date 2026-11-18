@@ -401,18 +401,23 @@ net.ipv4.ip_forward = 1
 net.ipv4.ip_nonlocal_bind = 1
 net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.default.rp_filter = 2
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_queued_events = 65536
 EOF
 sysctl --system
 sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
        net.ipv4.ip_forward net.ipv4.ip_nonlocal_bind \
-       net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter
-# 期望依次为 1 1 1 1 2 2，任何一项不符先解决再继续
+       net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter \
+       fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events
+# 期望依次为 1 1 1 1 2 2 8192 1048576 65536，任何一项不符先解决再继续
 ```
 
 - `ip_nonlocal_bind=1`：**必配**（内核/Ubuntu 默认 0）。HAProxy 显式绑定两个 VIP，VIP 未漂到本机时也要能启动，否则 bind 报 `EADDRNOTAVAIL`（master 必须，worker 无害）。
 - `rp_filter=2`（宽松）：双网卡不对称路由防丢包；严格模式（1）下 Calico IPIP 报文会被直接丢弃（Felix 检测到 strict RPF 也会拒绝工作）。生效值取 `max(all, 各网卡)`，`all=2` 已保证全部网卡宽松（网卡残留 1 不会生效）；`default=2` 让之后创建的 tunl0/veth 等接口同样宽松。注意：Ubuntu 24.04 默认已是 2（`/usr/lib/sysctl.d/10-network-security.conf`），此处显式写入是为了防安全加固基线（如 CIS 会改回 1）与镜像漂移，**不要因为"与默认重复"而删除**。
 - `ipip`：Calico IPIP 封装必需；内核 6.8 通常可按需自动加载，显式预加载消除一个失败点（清理时对应 `modprobe -r ipip`，见附录 C）。
-- IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（fs.inotify、nf_conntrack_max 等）按既定决策保持默认。
+- `fs.inotify` 三项：内核默认 instances=128、watches 通常 8192–65536，K8s 节点上 kubelet/cAdvisor、容器进程、日志与配置监听极易耗尽，症状是 Pod 内 `too many open files` / inotify `ENOSPC`、事件丢失；8192/1048576/65536 为集群常规取值（全局参数，不分 netns）。
+- IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（nf_conntrack_max 等）保持默认。
 
 ### 5.3 nftables 工具（只装命令行，服务禁用并 mask）
 
@@ -1331,6 +1336,7 @@ kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template
 | 离线纯净度 | `kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' \| sort -u` | 除业务 Pod 外全部来自 `${REGISTRY}`，无公网地址 |
 | apiserver | `kubectl get --raw='/readyz?verbose' \| tail -n 3` | 以 `readyz check passed` 结尾 |
 | 内核与锁定 | `uname -r; apt-mark showhold` | 6.8.0-149-generic；含内核包与元包 |
+| inotify | `sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events` | 8192 / 1048576 / 65536 |
 | kube-proxy | `kubectl -n kube-system get cm kube-proxy -o yaml \| grep 'mode:'` | nftables |
 | NodePort 范围 | 同上 `grep -A1 nodePortAddresses` | `${NODE_CIDR}` |
 | 证书 | `kubeadm certs check-expiration`（每台 master） | 叶子约 10 年、CA 约 20 年 |
@@ -1365,7 +1371,7 @@ kubectl delete pod net-a net-b
 - **Lustre 客户端**：1.26.3 时期的包基于 5.15 内核，不适用于 6.8；需要时补匹配 6.8.0-149 的客户端包再恢复。
 - **Kyverno**：2026-11-18 取消安装（版本矩阵、介质清单、工程仓库已同步移除；如将来启用再单独评审）。
 - **mergerfs**：不采用。
-- NFS/autofs 挂载与检查、StorageClass/PVC、NFS CSI、metrics-server、kube-prometheus、Volcano、GPU Operator、HTTPS/TLS、审计日志、etcd 加密、集中日志、根分区监控、fs.inotify 等内核调优：不在本版范围。
+- NFS/autofs 挂载与检查、StorageClass/PVC、NFS CSI、metrics-server、kube-prometheus、Volcano、GPU Operator、HTTPS/TLS、审计日志、etcd 加密、集中日志、根分区监控、nf_conntrack_max 等其余内核调优：不在本版范围。
 - Master 调度：保留默认污点；确需调度时手动移除。
 
 **etcd 备份责任（本文不实施，上线前必须交付）**：
