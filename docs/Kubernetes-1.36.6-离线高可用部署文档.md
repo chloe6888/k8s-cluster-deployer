@@ -126,6 +126,7 @@ export SERVICE_CIDR=10.96.0.0/12
 export IMAGE_LIST=/etc/k8s-preload-images.txt   # worker 预拉镜像清单（8.9 用）
 export METALLB_EXT_RANGE=                    # MetalLB 外网地址池（与节点外网 IP、EXT_VIP 避让）
 export GW_EXT_IP=                            # 入口 Gateway 固定外网 IP（须在 METALLB_EXT_RANGE 内）
+export NTP_SERVER=                           # 内网 NTP 服务器（5.7 chrony 用）
 # 仅 master 每台单独设置：master01=MASTER/100，master02=BACKUP/90，master03=BACKUP/80
 export KA_STATE=
 export KA_PRIORITY=
@@ -314,7 +315,7 @@ nerdctl push ${REGISTRY}/pause:3.10.2
 ### 4.3 apt 源与系统包
 
 - k8s 源：内网 apt 镜像站镜像 `pkgs.k8s.io/core:/stable:/v1.36/deb/`，公钥 `Release.key`（指纹核对见 8.1）。
-- 系统包（haproxy、keepalived、chrony/systemd-timesyncd、nftables、gettext-base 等）：内网 Ubuntu 镜像站，不入工程仓库。
+- 系统包（haproxy、keepalived、chrony、nftables、gettext-base 等）：内网 Ubuntu 镜像站，不入工程仓库。
 
 ### 4.4 仓库归档名与上传文件名映射
 
@@ -498,13 +499,27 @@ ls -l /run/systemd/resolve/resolv.conf    # 正常则跳过；否则：
 # apt install -y systemd-resolved && systemctl enable --now systemd-resolved
 ```
 
-### 5.7 时间同步
+### 5.7 时间同步（chrony）
 
-证书、etcd、token 都依赖时钟一致：
+证书、etcd、token 都依赖时钟一致；离线环境统一 chrony，指向内网 NTP 服务器（变量 `NTP_SERVER`，2.2）：
 
 ```bash
-timedatectl status | grep -E 'synchronized|NTP'   # synchronized 应为 yes
-# 未同步时按本集群 NTP 服务器配置 systemd-timesyncd 或 chrony
+source /etc/k8s-deploy.env
+
+apt install -y chrony       # 与 systemd-timesyncd 冲突，apt 自动卸载 timesyncd，属预期
+cat > /etc/chrony/chrony.conf <<EOF
+server ${NTP_SERVER} iburst
+
+driftfile /var/lib/chrony/chrony.drift
+makestep 1.0 3              # 启动后前 3 次校正若偏差 >1s 直接步进，避免时钟慢慢追
+rtcsync
+logdir /var/log/chrony
+EOF
+
+systemctl restart chrony && systemctl enable chrony
+chronyc sources             # ${NTP_SERVER} 行首为 ^* 才算已同步
+chronyc tracking | grep -E 'System time|Stratum'
+timedatectl | grep synchronized    # 应为 yes
 ```
 
 ### 5.8 journald 容量限制
@@ -513,9 +528,18 @@ timedatectl status | grep -E 'synchronized|NTP'   # synchronized 应为 yes
 mkdir -p /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/10-k8s-node.conf <<'EOF'
 [Journal]
-SystemMaxUse=2G
+Storage=persistent
+SystemMaxUse=4G
+SystemKeepFree=2G
+SystemMaxFileSize=256M
+MaxRetentionSec=1month
 EOF
-systemctl restart systemd-journald && journalctl --disk-usage
+
+systemctl restart systemd-journald
+
+# 验证：最终生效的配置、当前占用
+systemd-analyze cat-config systemd/journald.conf | grep -v '^#' | grep -v '^$'
+journalctl --disk-usage
 ```
 
 ### 5.9 存储（沿用现有配置）
@@ -1313,7 +1337,7 @@ kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template
 | Calico | `kubectl get tigerastatus; kubectl get ippools.projectcalico.org -o yaml` | 均 Available；IPIP Always、/25、natOutgoing true；镜像来自 `${REGISTRY}/calico/` |
 | VIP 高可用 | 停持有者 haproxy | 两个 VIP 均迁移（可落不同 master）；授权/非授权网段访问测试符合预期 |
 | kubelet 配置 | `grep ... /var/lib/kubelet/config.yaml` | maxPods 110、预留、驱逐（含 inodesFree）、日志轮转与本文一致 |
-| journald | `grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf` | 2G |
+| journald | `grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf` | 4G（5.8 值一致） |
 | MetalLB/Gateway | `kubectl get svc -n envoy-gateway-system` | EXTERNAL-IP = `${GW_EXT_IP}` |
 | etcd | `kubectl -n kube-system exec etcd-<节点> -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key endpoint health --cluster` | 全部 healthy |
 
@@ -1354,7 +1378,7 @@ kubectl delete pod net-a net-b
 
 ### B. 待验证事项清单（完成前本文不等同于最终生产手册）
 
-环境参数类：各集群登记表（2.2）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 6.3 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
+环境参数类：各集群登记表（2.2）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 6.3 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`NTP_SERVER`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
 
 版本与网络实测类：
 - kubeadm v1beta4 证书有效期字段在 1.36.6 的实际生效（`certs check-expiration`）。
