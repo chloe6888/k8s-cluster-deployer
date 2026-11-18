@@ -14,7 +14,7 @@
 | nerdctl | 2.3.0 | 调试客户端，拉镜像须 `-n k8s.io` |
 | crictl（cri-tools） | 随 k8s 源 | kubeadm 依赖自动安装，手动写 `/etc/crictl.yaml` |
 | Calico | 3.32.0 | **官方 Helm Chart 两件套**（CRD Chart + Tigera Operator Chart）；BGP full-mesh + IPIP Always；blockSize /25；启用 apiServer，关闭 goldmane/whisker |
-| MetalLB | 0.15.3 | 官方 Helm Chart；L2 模式；仅外网地址池；关闭 FRR |
+| MetalLB | 0.15.3 | 官方 Helm Chart；L2 模式；仅外网地址池；speaker 含内置 FRR sidecar（不可拆，改镜像即可） |
 | Envoy Gateway | 1.7.1 | 官方 OCI Helm Chart（CRDs 随 chart）；仅 HTTP 80 |
 | envoy（数据面） | distroless-v1.37.1 | 由 EnvoyProxy 资源指定 |
 | Helm | 3.22.1 | 仅 master 安装；OCI 拉取需 ≥3.8 |
@@ -185,9 +185,11 @@ PY
 | 项 | 约定 |
 |---|---|
 | 系统镜像 | `${REGISTRY}` = `${HARBOR}/k8s_dmz`，项目设为**公开**（否则 kubelet 拉 pause/calico 401） |
-| Calico 组件 | `installation.registry: ${REGISTRY}/` + `imagePath: calico` → `${REGISTRY}/calico/node` 等 |
+| Calico 组件 | `installation.registry: ${REGISTRY}/`（结尾斜杠，Installation CRD 要求），`imagePath` 不设 → `${REGISTRY}/calico/node` 等 |
 | Tigera Operator | `tigeraOperator.registry: ${REGISTRY}` + `image: tigera/operator` → `${REGISTRY}/tigera/operator` |
 | k8s 组件镜像 | `imageRepository: ${REGISTRY}`（kubeadm） |
+| MetalLB | `controller.image.repository` / `speaker.image.repository` / `speaker.frr.image.repository` 三处（10.1） |
+| Envoy Gateway | chart 单键 `global.imageRegistry: ${REGISTRY}`；数据面在 EnvoyProxy 资源（11.3） |
 | 业务镜像 | `${APP_REGISTRY}`（独立仓库/项目），业务侧 `imagePullSecrets`，节点预拉取用 `nerdctl login` |
 | Harbor 私有 CA | 证书文件分发到每节点 `/etc/containerd/certs.d/${HARBOR}/ca.crt`（见 4.1、7.2） |
 
@@ -232,8 +234,8 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 | control plane | 所有节点 | TCP 10250 | kubelet API |
 | 所有节点 ↔（内网） | 所有节点 | TCP 179 | Calico BGP full-mesh |
 | 所有节点 ↔（内网） | 所有节点 | IP 协议 4 | Calico IPIP 封装 |
-| calico 节点 | calico-typha | TCP 5473 | Typha（大规模时 Operator 部署，待验证） |
-| kube-apiserver | calico apiserver | TCP 5443 | Calico 聚合 API（待验证） |
+| calico 节点 | calico-typha | TCP 5473 | Typha（Operator 默认部署 2 副本） |
+| kube-apiserver | calico-apiserver | TCP 5443 | Calico 聚合 API（9.3 启用） |
 | keepalived 节点（内网二层） | VRRP peer | IP 协议 112（组播 224.0.0.18） | 内网 VIP |
 | keepalived 节点（外网二层） | VRRP peer | IP 协议 112 | 外网 VIP；**若二层禁组播改单播**（6.3 变体） |
 | 所有节点 ↔（内网） | 所有节点 | TCP/UDP 7946 | MetalLB speaker memberlist |
@@ -245,7 +247,7 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 | 运维机 | 所有节点 | TCP 22 | SSH |
 
 说明：
-- Calico 3.32 默认 `CLUSTER_TYPE=k8s,bgp`、IPIP Always、VXLAN Never；改数据面模式时本表须同步调整。
+- Calico 数据面为 IPIP Always、VXLAN Never（9.3 显式声明）；改数据面模式时本表须同步调整。
 - MetalLB L2 依赖外网二层 ARP/免费 ARP 通告，请网络侧确认交换机 ARP 检测、端口安全不拦截。
 - kube-proxy nftables 不会自动放通 NodePort，业务入口单独规划。
 - HAProxy 外网入口有源地址 ACL，但**不能只依赖它**，网络侧须做相同限制。
@@ -256,47 +258,48 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 
 ### 4.1 文件清单与上传
 
-统一上传到 `${FILE_URL}`，部署前逐个确认可下载（HTTP 200）。资源准备可用工程仓库 CI（`download-artifacts.yml`）自动完成，`scripts/package-offline.sh` 展开为下表文件名：
+统一上传到 `${FILE_URL}`，部署前逐个确认可下载（HTTP 200）。资源准备可用工程仓库 CI（`download-artifacts.yml`）自动完成，`scripts/package-offline.sh` 展开为下表文件名（`SHA256SUMS` 路径同步展平为文件名）：
 
 | 文件 | 用于章节 | 来源 |
 |---|---|---|
-| `containerd-2.3.0-linux-amd64.tar.gz`（+官方 sha256sum） | 7.1 | GitHub containerd v2.3.0 release |
+| `containerd-2.3.0-linux-amd64.tar.gz` | 7.1 | GitHub containerd v2.3.0 release |
 | `containerd.service` | 7.1 | containerd v2.3.0 源码仓库 |
-| `runc.amd64`、`runc.sha256sum` | 7.3 | GitHub runc v1.4.2 release |
-| `nerdctl-2.3.0-linux-amd64.tar.gz`（+SHA256SUMS） | 7.4 | GitHub nerdctl v2.3.0 release |
-| `helm-v3.22.1-linux-amd64.tar.gz`（+sha256sum） | 8.7 | get.helm.sh |
+| `runc.amd64`、`runc.sha256sum` | 7.3 | GitHub runc v1.4.2 release（runc 另对照上游 sha256sum） |
+| `nerdctl-2.3.0-linux-amd64.tar.gz` | 7.4 | GitHub nerdctl v2.3.0 release |
+| `helm-v3.22.1-linux-amd64.tar.gz` | 8.7 | get.helm.sh |
 | `Release.key` | 8.1 | `pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key`；**上传时记录 sha256 与 GPG 指纹** |
-| `harbor-ca.crt` | 7.2 | 本集群 Harbor 私有 CA 证书（新增：内网 CA 分发载体） |
+| `harbor-ca.crt` | 7.2 | 本集群 Harbor 私有 CA 证书（集群专属，不入工程仓库） |
+| `SHA256SUMS` | 4.1 | 工程仓库 `artifacts/checksums/SHA256SUMS`（CI 生成，覆盖上表仓库内全部文件） |
 | `tigera-operator-v3.32.0.tgz` | 9 | Calico 官方 Operator Chart |
 | `crd.projectcalico.org.v1-v3.32.0.tgz` | 9 | Calico 官方 **CRD Chart（必备，勿漏）** |
 | `metallb-0.15.3.tgz` | 10 | MetalLB 官方 Chart |
 | `gateway-helm-v1.7.1.tgz` | 11 | `oci://docker.io/envoyproxy/gateway-helm` |
+| `calico-3.32.0.yaml`、`metallb-native-v0.15.3.yaml`、`envoy-gateway-install-v1.7.1.yaml` | 9/10/11 | 上游 manifest（仅 chart 安装失败时手工 apply 兜底，镜像需已在 Harbor） |
 
 检查命令：
 
 ```bash
 source /etc/k8s-deploy.env
-for f in containerd-2.3.0-linux-amd64.tar.gz containerd-2.3.0-linux-amd64.tar.gz.sha256sum \
-         containerd.service runc.amd64 runc.sha256sum \
-         nerdctl-2.3.0-linux-amd64.tar.gz nerdctl-2.3.0-SHA256SUMS \
-         helm-v3.22.1-linux-amd64.tar.gz helm-v3.22.1-linux-amd64.tar.gz.sha256sum \
-         Release.key harbor-ca.crt \
+for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.sha256sum \
+         nerdctl-2.3.0-linux-amd64.tar.gz helm-v3.22.1-linux-amd64.tar.gz \
+         SHA256SUMS Release.key harbor-ca.crt \
          tigera-operator-v3.32.0.tgz crd.projectcalico.org.v1-v3.32.0.tgz \
-         metallb-0.15.3.tgz gateway-helm-v1.7.1.tgz; do
+         metallb-0.15.3.tgz gateway-helm-v1.7.1.tgz \
+         calico-3.32.0.yaml metallb-native-v0.15.3.yaml envoy-gateway-install-v1.7.1.yaml; do
   echo -n "$f  "; curl -s -o /dev/null -w "%{http_code}\n" -I ${FILE_URL}/$f
 done
 ```
 
 ### 4.2 镜像清单与推送 Harbor
 
-所有镜像推到 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取：
+所有镜像推到 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取。清单已对照各 chart 实际 values 与上游源码核实（详见 DECISIONS.md）：
 
-| 类别 | 镜像 | 依据 |
+| 类别 | 镜像（全部推 `${REGISTRY}`） | 章节 |
 |---|---|---|
 | K8s 系统 | `kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}` 的全部输出（含 pause:3.10.2） | 8.3 |
-| Calico | operator（`${REGISTRY}/tigera/operator`）+ `${REGISTRY}/calico/` 下 node、cni、typha、kube-controllers、apiserver、csi、node-driver-registrar 等；**以 `helm template` 渲染与 Operator 实际拉取为准**；goldmane/whisker 已禁用不推 | 9.3 |
-| MetalLB | `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`（L2 不需要 FRR） | 10 |
-| Envoy Gateway | 控制面 `envoyproxy/gateway:v1.7.1`、数据面 `envoyproxy/envoy:distroless-v1.37.1`；ratelimit `c8765e89` 仅启用限流时推；其余以 `helm template` 结果为准 | 11.1 |
+| Calico | `tigera/operator:v1.42.0`；`calico/` 下 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`（均 `:v3.32.0`）。CSI 默认关闭、goldmane/whisker 已禁用，相关镜像不需推送 | 9.3 |
+| MetalLB | `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`、`frrouting/frr:10.4.1`（speaker 内置 FRR sidecar） | 10 |
+| Envoy Gateway | `envoyproxy/gateway:v1.7.1`（控制面 + certgen Job 共用）、`envoyproxy/envoy:distroless-v1.37.1`（数据面，11.3 指定）。限流未启用，ratelimit 不推 | 11 |
 | 验收用 | busybox（版本自定） | 12 |
 
 推送方式（资源准备机，需能访问公网源与 Harbor）：
@@ -321,12 +324,16 @@ nerdctl push ${REGISTRY}/pause:3.10.2
 | `binaries/amd64/runc/1.4.2/runc.amd64`、`runc.sha256sum` | 同名 |
 | `binaries/amd64/nerdctl/2.3.0/nerdctl-2.3.0-linux-amd64.tar.gz` | 同名 |
 | `tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz` | 同名 |
+| `checksums/SHA256SUMS` | `SHA256SUMS`（路径展平为文件名） |
 | `templates/systemd/containerd.service.j2` | `containerd.service` |
 | `keys/kubernetes/Release.key` | 同名 |
 | `charts/calico/3.32.0/tigera-operator-v3.32.0.tgz` | 同名 |
 | `charts/calico/3.32.0/crd.projectcalico.org.v1-v3.32.0.tgz` | 同名 |
 | `charts/metallb/0.15.3/metallb-0.15.3.tgz` | 同名 |
 | `charts/envoy-gateway/1.7.1/gateway-helm-v1.7.1.tgz` | 同名 |
+| `manifests/calico/3.32.0/calico.yaml` | `calico-3.32.0.yaml` |
+| `manifests/metallb/0.15.3/metallb-native.yaml` | `metallb-native-v0.15.3.yaml` |
+| `manifests/envoy-gateway/1.7.1/envoy-gateway-install.yaml` | `envoy-gateway-install-v1.7.1.yaml` |
 
 由 `scripts/package-offline.sh` 自动完成展开。`harbor-ca.crt` 为集群专属（内网 Harbor 私有 CA），不在工程仓库归档，由 Harbor 管理员提供后随 `dist/offline-files` 一并上传。
 
@@ -359,8 +366,8 @@ getent hosts ${HARBOR}    # Harbor 域名必须可解析
 ```yaml
 network:
   version: 2
-  vlans:
-    vlan1254:            # 即 NODE_IFACE
+  ethernets:                 # 内网网卡若为 vlan 接口则用 vlans: 段，键名均为 ${NODE_IFACE}
+    <NODE_IFACE>:
       routes:
         - to: <目的网段>
           via: <内网网关>
@@ -701,8 +708,9 @@ ss -lntp | grep -E "${VIP_PORT}|8888"                # HAProxy 绑两个 VIP；s
 ```bash
 source /etc/k8s-deploy.env
 mkdir -p /data/package && cd /data/package
-wget ${FILE_URL}/containerd-2.3.0-linux-amd64.tar.gz{,.sha256sum}
-sha256sum -c containerd-2.3.0-linux-amd64.tar.gz.sha256sum
+wget ${FILE_URL}/SHA256SUMS
+wget ${FILE_URL}/containerd-2.3.0-linux-amd64.tar.gz
+grep 'containerd-2.3.0-linux-amd64.tar.gz$' SHA256SUMS | sha256sum -c -
 
 tar xf containerd-2.3.0-linux-amd64.tar.gz
 install -m 755 bin/* /usr/local/bin/          # 只装 /usr/local/bin，避免与旧拷贝双版本
@@ -756,7 +764,7 @@ EOF
 source /etc/k8s-deploy.env
 cd /data/package
 wget ${FILE_URL}/runc.amd64 ${FILE_URL}/runc.sha256sum
-grep ' runc.amd64$' runc.sha256sum | sha256sum -c -
+grep ' runc.amd64$' runc.sha256sum | sha256sum -c -     # 对照上游官方清单
 apt remove -y runc 2>/dev/null || true         # 若装过 apt 版
 install -m 755 runc.amd64 /usr/local/sbin/runc
 which -a runc && runc --version                # 1.4.2，首选 /usr/local/sbin
@@ -767,8 +775,8 @@ systemctl restart containerd                   # 使 7.1/7.2 配置生效（kube
 
 ```bash
 cd /data/package
-wget ${FILE_URL}/nerdctl-2.3.0-linux-amd64.tar.gz ${FILE_URL}/nerdctl-2.3.0-SHA256SUMS
-grep ' nerdctl-2.3.0-linux-amd64.tar.gz$' nerdctl-2.3.0-SHA256SUMS | sha256sum -c -
+wget ${FILE_URL}/nerdctl-2.3.0-linux-amd64.tar.gz
+grep 'nerdctl-2.3.0-linux-amd64.tar.gz$' SHA256SUMS | sha256sum -c -
 tar Cxzvvf /usr/local/bin nerdctl-2.3.0-linux-amd64.tar.gz
 # 本方案只部署 containerd，不装 docker；拉镜像必须指定 k8s.io 命名空间
 nerdctl --namespace k8s.io pull ${REGISTRY}/pause:3.10.2   # 顺带验证 Harbor 访问
@@ -942,8 +950,8 @@ ss -lntp | grep -E ':(6443|2379|2380|10250)'
 ```bash
 source /etc/k8s-deploy.env
 cd /data/package
-wget ${FILE_URL}/helm-${HELM_VERSION}-linux-amd64.tar.gz{,.sha256sum}
-sha256sum -c helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum
+wget ${FILE_URL}/helm-${HELM_VERSION}-linux-amd64.tar.gz
+grep "helm-${HELM_VERSION}-linux-amd64.tar.gz\$" SHA256SUMS | sha256sum -c -
 tar xf helm-${HELM_VERSION}-linux-amd64.tar.gz
 install -m 755 linux-amd64/helm /usr/local/bin/helm
 helm version        # ≥3.8；master02/03 加入后同样执行
@@ -1007,7 +1015,7 @@ grep -nE 'maxPods|kubeReserved|systemReserved|enforceNodeAllocatable|evictionHar
 
 ## 9. Calico v3.32.0（官方 Helm，两件套 Chart）
 
-不使用 latest；v3.32.0 发行 **CRD Chart + Operator Chart** 两个包，缺一不可。采用 API Server 模式（crd.projectcalico.org.v1 + Operator 启用 apiServer 提供 projectcalico.org/v3 API）；原生 v3 CRD 在 3.32 仍为技术预览，不要同时安装两套 CRD Chart；升 3.33+ 再评估迁移。
+两个 chart 缺一不可，分工明确：**CRD Chart**（`crd.projectcalico.org.v1`，含 `operator.tigera.io` + `crd.projectcalico.org` 两组 CRD）负责 CRD 的提供与升级；**Operator Chart** 以 `manageCRDs: false` 安装，operator 不再自装 CRD，避免与 helm 双头管理。聚合 API Server 模式（`apiServer.enabled: true`，kubectl 可直接管理 projectcalico.org/v3 资源）；原生 v3 CRD chart 在 3.32 为技术预览，不装、也不与两件套混用。
 
 ### 9.1 准备 Chart
 
@@ -1026,7 +1034,11 @@ helm pull projectcalico/tigera-operator --version v3.32.0 --destination ./charts
 source /etc/k8s-deploy.env
 mkdir -p /data/package/charts && cd /data/package/charts
 wget ${FILE_URL}/crd.projectcalico.org.v1-v3.32.0.tgz ${FILE_URL}/tigera-operator-v3.32.0.tgz
+grep 'crd.projectcalico.org.v1-v3.32.0.tgz$' ../SHA256SUMS | sha256sum -c -
+grep 'tigera-operator-v3.32.0.tgz$' ../SHA256SUMS | sha256sum -c -
 
+# CRD 体积巨大（installation 一个 CRD 上万行），helm 客户端 apply 会超 last-applied
+# 注解上限，必须 server-side apply；升级 CRD 时重跑本命令
 helm template calico-crds ./crd.projectcalico.org.v1-v3.32.0.tgz \
   | kubectl apply --server-side -f -
 kubectl create namespace tigera-operator --dry-run=client -o yaml | kubectl apply -f -
@@ -1037,17 +1049,17 @@ kubectl create namespace tigera-operator --dry-run=client -o yaml | kubectl appl
 ```bash
 source /etc/k8s-deploy.env
 cat > calico-values.yaml <<EOF
+manageCRDs: false                     # CRD 已由 9.2 提供，operator 不再自装
 installation:
   enabled: true
-  registry: ${REGISTRY}/            # 带结尾斜杠
-  imagePath: calico
+  registry: ${REGISTRY}/              # Installation CRD 要求结尾斜杠
   calicoNetwork:
     bgp: Enabled
     nodeAddressAutodetectionV4:
-      interface: "^${NODE_IFACE}$"  # 必须匹配所有节点内网网卡、不匹配外网网卡
+      interface: "^${NODE_IFACE}\$"   # 只匹配内网网卡
     ipPools:
       - cidr: ${POD_CIDR}
-        encapsulation: IPIP         # Always（同层 CrossSubnet 评估见附录 B）
+        encapsulation: IPIP           # Always；同层组网时 CrossSubnet 评估见附录 B
         natOutgoing: Enabled
         blockSize: 25
         nodeSelector: all()
@@ -1059,24 +1071,25 @@ whisker:
   enabled: false
 tigeraOperator:
   image: tigera/operator
-  version: v1.42.0                  # 待验证：以 helm show values 默认值为准
-  registry: ${REGISTRY}            # 不带结尾斜杠
+  version: v1.42.0                    # chart v3.32.0 默认即此值
+  registry: ${REGISTRY}
 EOF
 
-# 强制步骤：渲染核对全部镜像指向 ${REGISTRY}
+# 强制步骤：渲染核对镜像指向 ${REGISTRY}
 helm template calico ./tigera-operator-v3.32.0.tgz -n tigera-operator -f calico-values.yaml | grep -E 'image:' | sort -u
 ```
 
-- `installation.registry` 带斜杠、`tigeraOperator.registry` 不带（渲染结果不得出现双斜杠）。
-- Calico 组件镜像是 Operator 运行后才拉的：清单以渲染结果 + 安装后 `kubectl get pods -n calico-system -o jsonpath=...` 核对，goldmane/whisker 已禁用不推。
-- apiServer.enabled 等键位、operator 版本以 `helm show values` 为准（待验证）。
+- `imagePath` 保持不设：各组件默认路径即 `calico/`，设了反而改变拼装结果。
+- 渲染中只出现 `${REGISTRY}/tigera/operator:v1.42.0` 一处 image；calico 组件镜像由 operator 运行时按 `installation.registry` 拼装，离线清单见 4.2，安装后按 9.6 复核。
+- goldmane/whisker（chart 默认启用）必须显式关闭，否则离线环境拉 `calico/goldmane`、`calico/whisker` 失败。
 
 ### 9.4 安装 Operator 与验证
 
 ```bash
 helm upgrade --install calico ./tigera-operator-v3.32.0.tgz -n tigera-operator -f calico-values.yaml
 kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=5m
-kubectl get tigerastatus               # apiserver、calico 均 Available=True；无 goldmane/whisker
+kubectl get tigerastatus               # calico、apiserver 均 Available=True；无 goldmane/whisker
+kubectl get apiservice v3.projectcalico.org    # True（聚合 API 就绪）
 ```
 
 ### 9.5 BGP full-mesh（只验证，不手动创建）
@@ -1094,7 +1107,9 @@ kubectl get ippools.projectcalico.org -o yaml    # cidr=${POD_CIDR}、blockSize 
 ### 9.6 验证
 
 ```bash
-kubectl get pods -n calico-system -o wide    # 全部 Running；镜像均来自 ${REGISTRY}/calico/
+kubectl get pods -n calico-system -o wide
+# 全部 Running；镜像均来自 ${REGISTRY}/calico/，无公网地址：
+kubectl -n calico-system get pods -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\n' | sort -u
 kubectl get nodes -o wide                     # 节点 IP 均为内网 IP
 ```
 
@@ -1102,24 +1117,35 @@ kubectl get nodes -o wide                     # 节点 IP 均为内网 IP
 
 ## 10. MetalLB v0.15.3（官方 Helm，L2 模式）
 
-### 10.1 Chart 与 values（关闭 FRR）
+### 10.1 Chart 与 values（镜像离线覆盖）
+
+L2 模式无必改功能项（`crds.enabled` 默认 true，CRD 随 chart 安装）；speaker 自带 FRR sidecar（0.15 起与 speaker 同 Pod、不可关闭），离线只需把三处镜像指向内网：
 
 ```bash
+source /etc/k8s-deploy.env
 # 资源准备机：helm repo add metallb https://metallb.github.io/metallb && helm repo update
 #   helm pull metallb/metallb --version 0.15.3 → 上传 ${FILE_URL}
-cat > metallb-values.yaml << 'EOF'
-frrk8s:
-  enabled: false
+cat > metallb-values.yaml <<EOF
+controller:
+  image:
+    repository: ${REGISTRY}/metallb/controller
 speaker:
+  image:
+    repository: ${REGISTRY}/metallb/speaker
   frr:
-    enabled: false
+    image:
+      repository: ${REGISTRY}/frrouting/frr    # tag 默认 10.4.1，随 chart
 EOF
-# 待验证：字段以 helm show values ./metallb-0.15.3.tgz 为准
 ```
 
 ### 10.2 安装（speaker 需特权，PSA 放行）
 
 ```bash
+source /etc/k8s-deploy.env
+cd /data/package/charts
+wget ${FILE_URL}/metallb-0.15.3.tgz
+grep 'metallb-0.15.3.tgz$' ../SHA256SUMS | sha256sum -c -
+
 kubectl create namespace metallb-system --dry-run=client -o yaml | kubectl apply -f -
 kubectl label namespace metallb-system \
   pod-security.kubernetes.io/enforce=privileged \
@@ -1127,7 +1153,8 @@ kubectl label namespace metallb-system \
   pod-security.kubernetes.io/warn=privileged --overwrite
 
 helm upgrade --install metallb ./metallb-0.15.3.tgz -n metallb-system -f metallb-values.yaml
-helm template metallb ./metallb-0.15.3.tgz -n metallb-system -f metallb-values.yaml | grep -E 'image:' | sort -u   # 核对指向 ${REGISTRY}
+# 强制核对：三个镜像（controller/speaker/frr）均指向 ${REGISTRY}
+helm template metallb ./metallb-0.15.3.tgz -n metallb-system -f metallb-values.yaml | grep -E 'image:' | sort -u
 kubectl -n metallb-system rollout status deployment/metallb-controller --timeout=5m
 kubectl -n metallb-system rollout status daemonset/metallb-speaker --timeout=5m
 ```
@@ -1174,20 +1201,22 @@ nftables 模式无需 strictARP 设置；同一 Service 入口流量只落一台
 
 ### 11.1 Chart、values 与镜像核对（强制）
 
-values 只覆盖控制面镜像；数据面由 EnvoyProxy 资源指定（11.3）。键名以 `helm show values` 为准：
+chart 单键 `global.imageRegistry` 同时覆盖控制面与 certgen Job；数据面镜像不在 chart 内，由 EnvoyProxy 资源指定（11.3）：
 
 ```bash
 source /etc/k8s-deploy.env
+cd /data/package/charts
+wget ${FILE_URL}/gateway-helm-v1.7.1.tgz
+grep 'gateway-helm-v1.7.1.tgz$' ../SHA256SUMS | sha256sum -c -
+
 cat > envoy-gateway-values.yaml <<EOF
 global:
-  images:
-    envoyGateway:
-      image: ${REGISTRY}/envoyproxy/gateway:v1.7.1
+  imageRegistry: ${REGISTRY}
 EOF
 
 helm template eg ./gateway-helm-v1.7.1.tgz -n envoy-gateway-system -f envoy-gateway-values.yaml | grep -E 'image:' | sort -u
-# 渲染出的每一个镜像（控制面、certgen Job、shutdown-manager 等）都必须指向 ${REGISTRY} 且已在 Harbor；
-# 数据面 envoy 不会出现在此渲染中，单独确认 distroless-v1.37.1 已推送；仍有公网地址则补 values，否则不得安装
+# 渲染出的每一个镜像都应为 ${REGISTRY}/envoyproxy/gateway:v1.7.1；
+# 数据面 envoy 不在此渲染内，确认 distroless-v1.37.1 已按 4.2 推送
 ```
 
 ### 11.2 安装
@@ -1261,6 +1290,8 @@ spec:
 EOF
 kubectl apply -f envoy-gateway.yaml
 kubectl get svc -n envoy-gateway-system    # Envoy Service EXTERNAL-IP = ${GW_EXT_IP}
+# 数据面镜像复核：envoy Deployment 各容器均应指向 ${REGISTRY}
+kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}' | tr ' ' '\n' | sort -u
 ```
 
 ---
@@ -1273,6 +1304,7 @@ kubectl get svc -n envoy-gateway-system    # Envoy Service EXTERNAL-IP = ${GW_EX
 |---|---|---|
 | 节点状态 | `kubectl get nodes -o wide` | 全部 Ready；INTERNAL-IP 均为内网 IP（非 VIP） |
 | 系统 Pod | `kubectl get pods -A -o wide` | 全部 Running/Completed |
+| 离线纯净度 | `kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' \| sort -u` | 除业务 Pod 外全部来自 `${REGISTRY}`，无公网地址 |
 | apiserver | `kubectl get --raw='/readyz?verbose' \| tail -n 3` | 以 `readyz check passed` 结尾 |
 | 内核与锁定 | `uname -r; apt-mark showhold` | 6.8.0-149-generic；含内核包与元包 |
 | kube-proxy | `kubectl -n kube-system get cm kube-proxy -o yaml \| grep 'mode:'` | nftables |
@@ -1327,9 +1359,9 @@ kubectl delete pod net-a net-b
 版本与网络实测类：
 - kubeadm v1beta4 证书有效期字段在 1.36.6 的实际生效（`certs check-expiration`）。
 - containerd 2.3.0 config.toml（version 3）各键位：sandbox_image/pinned_images、SystemdCgroup、config_path、certs.d hosts.toml 与私有 CA。
-- Calico：CRD Chart + Operator Chart 在 1.36.6 的安装；apiServer/goldmane/whisker 键位；operator 版本 v1.42.0 与 chart 默认一致性；51 节点 BGP mesh 邻居建立、TCP 179/IPIP 连通与控制面资源；`calicoctl node status` 或等效检查；同层 CrossSubnet 对比评估。
-- MetalLB 0.15.3 chart 关 FRR 的字段、镜像核对、L2 免费 ARP 是否被外网交换机拦截。
-- Envoy Gateway 1.7.1 chart CRD 安装、values 键名、EnvoyProxy 配置、外网→Pod 全链路。
+- Calico：两件套 chart 在 1.36.6 的安装与 `tigerastatus`；51 节点 BGP mesh 邻居建立、TCP 179/IPIP 连通与控制面资源；`calicoctl node status` 等效检查；同层组网时 CrossSubnet 对比评估。
+- MetalLB 0.15.3：L2 免费 ARP 是否被外网交换机拦截。
+- Envoy Gateway 1.7.1：EnvoyProxy 数据面镜像生效核对（11.4）、外网→Pod 全链路。
 - HAProxy httpchk 与后端 apiserver 的兼容实测；VIP 漂移三类场景（haproxy 死亡、外网层故障、抢占恢复）。
 - 版本组合（containerd 2.3.0/runc 1.4.2/nerdctl 2.3.0/Calico 3.32.0/EG 1.7.1/MetalLB 0.15.3/内核 6.8.0-149）存在性与兼容性逐一对照官方 release。
 
