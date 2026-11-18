@@ -445,23 +445,38 @@ free -h | grep -i swap               # 应为 0
 ### 5.5 内核固定与锁定、关闭自动更新
 
 ```bash
-apt-cache policy linux-image-6.8.0-149-generic
+# ① 安装固定版本内核（候选为空 = 内网镜像站未同步该版本，先解决镜像站再继续）
+apt-cache policy linux-image-6.8.0-149-generic    # 应显示已安装或候选版本
 apt install -y linux-image-6.8.0-149-generic linux-headers-6.8.0-149-generic linux-modules-extra-6.8.0-149-generic
-reboot
-uname -r                              # 必须 6.8.0-149-generic，否则先处理启动项
 
+# ② 确认 ① 成功后，删除其余内核并更新 GRUB——否则 GRUB 默认启动最高版本，
+#    节点若自带更高版本内核（HWE 等），重启后仍不是 6.8.0-149
+dpkg -l | awk '/^ii  linux-(image|headers|modules|modules-extra)-[0-9]/ {print $2}' \
+  | grep -v -- '6.8.0-149' | xargs -r apt-get purge -y
+update-grub
+ls /boot/vmlinuz-*                    # 只应剩 vmlinuz-6.8.0-149-generic
+
+# ③ 重启并确认
+reboot
+uname -r                              # 必须 6.8.0-149-generic
+
+# ④ 锁定版本内核 + 元包（元包不锁，apt upgrade 会经元包装入更高版本内核；
+#    清单含 virtual/signed 系列，未安装的由 dpkg -s 检查自动跳过）
 apt-mark hold linux-image-6.8.0-149-generic linux-headers-6.8.0-149-generic \
   linux-modules-6.8.0-149-generic linux-modules-extra-6.8.0-149-generic
-# 内核元包一并 hold，否则 apt upgrade 会经元包装入更高版本内核
 for p in linux-generic linux-image-generic linux-headers-generic \
+         linux-virtual linux-image-virtual linux-headers-virtual \
+         linux-signed-generic linux-signed-image-generic \
          linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 linux-headers-generic-hwe-24.04; do
   dpkg -s "$p" >/dev/null 2>&1 && apt-mark hold "$p"
 done
-apt-mark showhold
-dpkg -l 'linux-image-*' | grep '^ii'  # 确认无更高版本内核已装
+apt-mark showhold                     # 版本内核 4 个 + 实际安装的元包
 
+# ⑤ 关闭自动更新（20auto-upgrades 是 apt.systemd-daily 真正读的开关；disable 服务与 timer 是双保险）
 sed -i 's/Unattended-Upgrade "1"/Unattended-Upgrade "0"/' /etc/apt/apt.conf.d/20auto-upgrades
+grep Unattended /etc/apt/apt.conf.d/20auto-upgrades    # 应为 "0"
 systemctl disable --now unattended-upgrades
+systemctl disable --now apt-daily-upgrade.timer
 ```
 
 固定内核不再收安全更新，需定期评估升级。
