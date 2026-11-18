@@ -406,9 +406,14 @@ sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
 - `ipip`：Calico IPIP 封装必需；内核 6.8 通常可按需自动加载，显式预加载消除一个失败点（清理时对应 `modprobe -r ipip`，见附录 C）。
 - IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（fs.inotify、nf_conntrack_max 等）按既定决策保持默认。
 
-### 5.3 nftables 模块与命令行（不启用服务）
+### 5.3 nftables 工具（只装命令行，服务禁用并 mask）
 
-kube-proxy nftables 模式自行管理 `ip kube-proxy` 表，不依赖 nftables.service；Ubuntu 的 `/etc/nftables.conf` 以 `flush ruleset` 开头，该服务启停/重载会**清空全部规则**（含 kube-proxy 与 Calico）。因此只装命令行：
+kube-proxy nftables 模式自行管理 `ip kube-proxy` 表，不依赖 nftables.service；该服务反而是危险对象（Ubuntu 24.04 实测，`systemctl cat nftables`）：
+
+- `ExecStart`/`ExecReload` = `nft -f /etc/nftables.conf`，而该文件第一行就是 **`flush ruleset`** → start/reload 先清空全部规则（kube-proxy、Calico、主机防火墙一起没）；
+- **最隐蔽的是 stop：单元的 `ExecStop=/usr/sbin/nft flush ruleset`，"停个服务"本身就是清空规则**。
+
+因此只装命令行工具，并把服务 **mask**（mask 后 start/stop/reload 全部被 systemd 直接拒绝，把"不要碰"变成硬约束；确需恢复时 `systemctl unmask`）：
 
 ```bash
 cat << EOF | tee /etc/modules-load.d/nftables.conf
@@ -418,13 +423,16 @@ nf_conntrack
 EOF
 modprobe nf_tables && modprobe nf_nat && modprobe nf_conntrack
 
-apt install -y nftables
-systemctl is-enabled nftables        # 应 disabled；enabled 则 disable（不要 --now）
-systemctl mask nftables              # 可选，防误启动
-nft --version                        # ≥1.0.1；内核 ≥5.13（6.8 满足）
+apt install -y nftables                 # 只为 nft 命令行（8.6 验证、附录 C 清理用）
+systemctl is-enabled nftables           # 应 disabled；若 enabled 只 disable，绝不加 --now（--now 触发 stop=清空规则）
+systemctl mask nftables
+
+nft --version                           # Ubuntu 24.04 为 1.0.9；kube-proxy nftables 要求内核 ≥5.13（6.8 满足）
+iptables -V                             # 应显示 (nf_tables)：kube-proxy 与 Calico 同走 nft 后端，规则统一可见；若镜像曾被改为 legacy 需先改回
+systemctl is-active ufw                 # 记录结果：ufw 走 iptables-nft 与集群共存，但 flush ruleset 同样会清掉它；若节点启用了 ufw，通知网络/安全侧纳入 §3 的防火墙责任
 ```
 
-不要对 nftables 服务执行 start/stop/restart/reload；自定义持久化规则用独立 table，禁止 `flush ruleset`。
+自定义规则用独立 table（`nft add table ...`），任何时候禁止 `flush ruleset`（包括排障和清理，见附录 C）。
 
 ### 5.4 关闭 swap
 
