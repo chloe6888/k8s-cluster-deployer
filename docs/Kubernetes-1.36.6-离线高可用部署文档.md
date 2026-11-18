@@ -1,6 +1,8 @@
 # Kubernetes 1.36.6 离线高可用集群部署文档
 
-## 1. 概述与架构
+## 1. 部署准备（架构、参数、网络与介质）
+
+讨论结论与决策理由记录在工程仓库 `docs/DECISIONS.md`，本文只写结论与操作步骤。
 
 ### 1.1 组件版本矩阵
 
@@ -19,8 +21,7 @@
 | envoy（数据面） | distroless-v1.37.1 | 由 EnvoyProxy 资源指定 |
 | Helm | 3.22.1 | 仅 master 安装；OCI 拉取需 ≥3.8 |
 
-
-### 1.2 架构拓扑
+### 1.2 架构与节点规划
 
 ```
  外部客户端(业务)          授权运维网段                    集群节点 / 管理网
@@ -50,46 +51,11 @@
 要点（其余细节见各章）：
 
 - **内外两个 API VIP 独立漂移**（不使用 vrrp_sync_group）：外网网络更不稳定，同步组会让外网 VRRP 抖动连累内网 VIP；两个 VIP 允许落在不同 master，正常时都在 master01。
-- 集群内部通信（API/etcd/kubelet/Pod 底层/存储）一律走内网网卡；默认路由、业务入口、外部运维 API 走外网网卡。各组件逐项配置见 2.5 索引表。
+- 集群内部通信（API/etcd/kubelet/Pod 底层/存储）一律走内网网卡；默认路由、业务入口、外部运维 API 走外网网卡。组件逐一指定：路由 2.1、kubelet `--node-ip` 5.1、apiserver/etcd 地址 5.4、kube-proxy `nodePortAddresses` 5.4、Calico 网卡限定 6.3、MetalLB `interfaces` 7.3、入口 Gateway 固定 IP 8.3。
+- 节点：物理机，双 10G 网卡，分区全给根目录，root 部署；节点名统一 `${CLUSTER_PREFIX}-k8s-master0N` / `${CLUSTER_PREFIX}-k8s-worker1N`（全小写）；当前规划约 51 台（3 master + 48 worker），同一二层网络，BGP full-mesh（N×(N-1)/2 ≈ 1275 对邻居，上线前须实测 TCP 179 与 IPIP 连通性）。
+- 离线分发三渠道：deb → 内网 apt 镜像站；二进制/chart/证书 → `${FILE_URL}`（1.6）；镜像 → Harbor 公开项目。有官方 Helm Chart 的组件一律 chart 安装（Calico / MetalLB / Envoy Gateway），manifest 仅作离线兜底。
 
-### 1.3 设计原则
-
-- 本文正文不写死 IP/域名/密码，一律以 `${变量名}` 引用，执行前按 2.2 清单在当前 shell 赋值；唯一例外是 6.0 变量块，直接写入本集群实际值。
-- 有官方 Helm Chart 的组件一律 chart 安装（Calico / MetalLB / Envoy Gateway），manifest 仅作离线兜底。
-- 离线分发三渠道：deb → 内网 apt 镜像站；二进制/chart/证书 → `${FILE_URL}`；镜像 → Harbor 公开项目。
-- 讨论过程与决策理由记录在仓库 `docs/DECISIONS.md`，本文只写结论与操作步骤。
-
-### 1.4 执行总览
-
-| 阶段 | 范围 | 章节 |
-|---|---|---|
-| 规划与准备 | 所有节点 | 2（变量清单、网段冲突检查、介质与镜像） |
-| 系统初始化 | 所有节点 | 5 |
-| 容器运行时 | 所有节点 | 7 |
-| 高可用入口 | master | 6（两个 VIP 可用后才能 init） |
-| K8s 组件与初始化 | 所有节点 → master01 | 8 |
-| Calico | master01 | 9 |
-| master/worker 加入 | master02/03、workers | 8.8、8.9 |
-| MetalLB / Envoy Gateway | 任一 master | 10、11 |
-| 验收 | 任一 master | 12 |
-
----
-
-## 2. 部署前必须确认的参数
-
-### 2.1 节点规划
-
-- 物理机，双 10G 网卡，分区全给根目录，root 部署。
-- 节点名统一 `${CLUSTER_PREFIX}-k8s-master0N` / `${CLUSTER_PREFIX}-k8s-worker1N`（全小写）。
-- 当前规划约 51 台（3 master + 48 worker），同一二层网络，BGP full-mesh（N×(N-1)/2 ≈ 1275 对邻居，上线前须实测 TCP 179 与 IPIP 连通性）。
-
-| 节点 | 内网 IP | 外网 IP | 安装软件 |
-|---|---|---|---|
-| `${CLUSTER_PREFIX}-k8s-master01..03` | 按集群填 | 按集群填 | containerd、keepalived、haproxy、kubeadm 套件、helm |
-| `${CLUSTER_PREFIX}-k8s-worker11..1N` | 按集群填 | 按集群填 | containerd、kubeadm 套件 |
-| API VIP | 内网 VIP + 外网运维 VIP | — | keepalived 各自独立漂移 |
-
-### 2.2 集群变量清单（执行前按集群赋值）
+### 1.3 集群变量清单（执行前按集群赋值）
 
 本文不写死任何域名/IP/密码，正文命令一律以 `${变量名}` 引用；执行任何一章命令前，先在当前 shell 把下表变量 export 赋值（换集群即换一组值）：
 
@@ -101,10 +67,10 @@
 | `EXT_IFACE` | 外网网卡名（默认路由、对外入口） |
 | `NODE_IP` | 本节点内网 IP（取值命令见下；已过滤 keepalived 的 secondary/VIP 地址） |
 | `HARBOR` | 本集群 Harbor 域名 |
-| `REGISTRY` | 默认 `${HARBOR}/k8s_dmz`；系统镜像仓库项目（pause/calico/metallb/envoy/kubeadm 镜像） |
+| `REGISTRY` | 默认 `${HARBOR}/k8s_dmz`；系统镜像仓库项目（pause/calico/metallb/envoy/kubeadm 镜像），**必须设为公开** |
 | `APP_REGISTRY` | 业务镜像仓库（worker 预拉取用） |
 | `MIRROR` | 内网 apt 镜像站 |
-| `FILE_URL` | 默认 `${MIRROR}/repository/tmp-file/k8sv1.36`；安装文件目录（需自行上传，见 4.1） |
+| `FILE_URL` | 默认 `${MIRROR}/repository/tmp-file/k8sv1.36`；安装文件目录（需自行上传，见 1.6） |
 | `HELM_VERSION` | 默认 `v3.22.1`；仅 master 与资源准备机 |
 | `VIP`、`VIP_PREFIX` | apiserver 内网 VIP（`NODE_CIDR` 内、未占用）、掩码长度（如 24） |
 | `EXT_VIP`、`EXT_VIP_PREFIX` | apiserver 外网运维 VIP、掩码长度 |
@@ -115,10 +81,10 @@
 | `KA_AUTH_PASS` | keepalived 认证密码（≤8 位） |
 | `STATS_AUTH` | haproxy 统计页 `账号:密码`，必须改强密码 |
 | `POD_CIDR`、`SERVICE_CIDR` | 默认 `10.244.0.0/14`、`10.96.0.0/12` |
-| `IMAGE_LIST` | 默认 `/etc/k8s-preload-images.txt`；worker 预拉镜像清单（8.9 用） |
+| `IMAGE_LIST` | 默认 `/etc/k8s-preload-images.txt`；worker 预拉镜像清单（5.9 用） |
 | `METALLB_EXT_RANGE` | MetalLB 外网地址池（与节点外网 IP、EXT_VIP 避让） |
 | `GW_EXT_IP` | 入口 Gateway 固定外网 IP（须在 `METALLB_EXT_RANGE` 内） |
-| `NTP_SERVER` | 内网 NTP 服务器（5.7 chrony 用） |
+| `NTP_SERVER` | 内网 NTP 服务器（2.7 chrony 用） |
 | `KA_STATE`、`KA_PRIORITY` | 仅 master 每台单独设置：master01=`MASTER`/100，master02=`BACKUP`/90，master03=`BACKUP`/80；worker 不设 |
 | `NODE_NAME` | 不入清单，执行前按节点单独 `export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01` 等 |
 
@@ -129,8 +95,8 @@ export NODE_IP=$(ip -4 -o addr show dev ${NODE_IFACE} scope global | grep -v sec
 ```
 
 - 含密码项（`KA_AUTH_PASS`/`STATS_AUTH`）建议放自管的权限受控文件（chmod 600）或部署平台注入，避免留在 shell history。
-- 命令前先 `echo ${REGISTRY}` 等抽查非空；`NODE_IP` 赋值后确认不是 VIP（2.5）。
-- 后文所有 `${...}` 均来自本表；第 6 章例外——6.0 变量块直接携带本集群实际值（与本表登记保持一致）。
+- 命令前先 `echo ${REGISTRY}` 等抽查非空；`NODE_IP` 赋值后确认不是 VIP。
+- 后文所有 `${...}` 均来自本表；第 3 章例外——3.0 变量块直接携带本集群实际值（与本表登记保持一致）。
 
 各集群取值登记表（部署前填好）：
 
@@ -139,7 +105,7 @@ export NODE_IP=$(ip -4 -o addr show dev ${NODE_IFACE} scope global | grep -v sec
 | A | | | | | | | | | | | |
 | B | | | | | | | | | | | |
 
-### 2.3 网段冲突检查（Calico 安装前执行）
+### 1.4 网段冲突检查（Calico 安装前执行）
 
 Pod/Service 网段必须与内网、外网、Harbor、镜像站、存储、运维网段互不重叠。`EXTRA_NETS` 填路由表看不到的网段：
 
@@ -169,46 +135,7 @@ PY
 
 在尚未安装 Calico 的节点执行（装完后路由表会出现 Pod 网段路由，造成误报）。
 
-### 2.4 镜像仓库约定
-
-| 项 | 约定 |
-|---|---|
-| 系统镜像 | `${REGISTRY}` = `${HARBOR}/k8s_dmz`，项目设为**公开**（否则 kubelet 拉 pause/calico 401） |
-| Calico 组件 | `installation.registry: ${REGISTRY}/`（结尾斜杠，Installation CRD 要求），`imagePath` 不设 → `${REGISTRY}/calico/node` 等 |
-| Tigera Operator | `tigeraOperator.registry: ${REGISTRY}` + `image: tigera/operator` → `${REGISTRY}/tigera/operator` |
-| k8s 组件镜像 | `imageRepository: ${REGISTRY}`（kubeadm） |
-| MetalLB | `controller.image.repository` / `speaker.image.repository` / `speaker.frr.image.repository` 三处（10.1） |
-| Envoy Gateway | chart 单键 `global.imageRegistry: ${REGISTRY}`；数据面在 EnvoyProxy 资源（11.3） |
-| 业务镜像 | `${APP_REGISTRY}`（独立仓库/项目），业务侧 `imagePullSecrets`，节点预拉取用 `nerdctl login` |
-| Harbor 私有 CA | 证书文件分发到每节点 `/etc/containerd/certs.d/${HARBOR}/ca.crt`（见 4.1、7.2） |
-
-### 2.5 多网卡规划
-
-集群流量走内网网卡；外网网卡承载默认路由、业务入口、外部运维 VIP。组件不指定时会按默认路由（外网）选错：
-
-| 组件 | 指定方式 | 章节 |
-|---|---|---|
-| 路由 | 默认路由只在外网网卡；内网非直连目的地加静态路由 | 5.1 |
-| keepalived/haproxy | 两个独立 VRRP 实例（内 `${NODE_IFACE}`、外 `${EXT_IFACE}`）；HAProxy 分别绑两个 VIP | 6 |
-| kubelet | `/etc/default/kubelet` 设 `--node-ip=${NODE_IP}` | 8.1 |
-| apiserver/etcd | `advertiseAddress: ${NODE_IP}`；join 加 `--apiserver-advertise-address` | 8.4、8.8 |
-| kube-proxy | `nodePortAddresses: [${NODE_CIDR}]` | 8.4 |
-| calico | `nodeAddressAutodetectionV4.interface: "^${NODE_IFACE}$"` | 9.3 |
-| MetalLB | L2Advertisement `interfaces: [${EXT_IFACE}]` | 10.3 |
-| 入口 Gateway | 固定 `GW_EXT_IP` | 11.3 |
-| 存储 | 流量走内网，配置沿用现有方案 | 附录 A |
-
-每节点变量赋值后先检查：
-
-```bash
-echo "${NODE_IFACE} ${NODE_IP} ${NODE_CIDR} ${EXT_IFACE}"    # 四项非空
-[ "${NODE_IP}" != "${VIP}" ] && [ "${NODE_IP}" != "${EXT_VIP}" ] || echo "NODE_IP 取到 VIP，请按节点手工指定"
-sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是 1
-```
-
----
-
-## 3. 网络与防火墙要求
+### 1.5 网络与防火墙要求
 
 主机防火墙与网络侧 ACL 不在本文配置范围，下表部署前交网络/安全侧对照放通：
 
@@ -222,49 +149,43 @@ sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter   # 不能是
 | 所有节点 ↔（内网） | 所有节点 | TCP 179 | Calico BGP full-mesh |
 | 所有节点 ↔（内网） | 所有节点 | IP 协议 4 | Calico IPIP 封装 |
 | calico 节点 | calico-typha | TCP 5473 | Typha（Operator 默认部署 2 副本） |
-| kube-apiserver | calico-apiserver | TCP 5443 | Calico 聚合 API（9.3 启用） |
+| kube-apiserver | calico-apiserver | TCP 5443 | Calico 聚合 API（6.3 启用） |
 | keepalived 节点（内网二层） | VRRP peer | IP 协议 112（组播 224.0.0.18） | 内网 VIP |
-| keepalived 节点（外网二层） | VRRP peer | IP 协议 112 | 外网 VIP；**若二层禁组播改单播**（6.4 变体） |
+| keepalived 节点（外网二层） | VRRP peer | IP 协议 112 | 外网 VIP；**若二层禁组播改单播**（3.4 变体） |
 | 所有节点 ↔（内网） | 所有节点 | TCP/UDP 7946 | MetalLB speaker memberlist |
 | 运维机 | master 内网 IP | TCP 8888 | HAProxy 统计页（仅内网） |
 | 外网客户端 | `${GW_EXT_IP}` | TCP 80 | Envoy Gateway 业务入口 |
 | 外网 → 节点外网 IP | — | TCP/UDP 30000–32767 | **应拒绝**（NodePort 只在内网监听） |
-| 外部（除授权网段经外网 VIP） | master 外网 IP | TCP 6443 | **应拒绝**：apiserver 监听 0.0.0.0，直连绕过 HAProxy ACL（6.7） |
+| 外部（除授权网段经外网 VIP） | master 外网 IP | TCP 6443 | **应拒绝**：apiserver 监听 0.0.0.0，直连绕过 HAProxy ACL（3.7） |
 | 节点 | Harbor / 镜像站 | TCP 443/80 | 镜像拉取、文件下载 |
 | 节点 | DNS / NTP | 53 / 123 | 解析、时间同步 |
 | 运维机 | 所有节点 | TCP 22 | SSH |
 
 说明：
-- Calico 数据面为 IPIP Always、VXLAN Never（9.3 显式声明）；改数据面模式时本表须同步调整。
+- Calico 数据面为 IPIP Always、VXLAN Never（6.3 显式声明）；改数据面模式时本表须同步调整。
 - MetalLB L2 依赖外网二层 ARP/免费 ARP 通告，请网络侧确认交换机 ARP 检测、端口安全不拦截。
 - kube-proxy nftables 不会自动放通 NodePort，业务入口单独规划。
 - HAProxy 外网入口有源地址 ACL，但**不能只依赖它**，网络侧须做相同限制。
 
----
+### 1.6 离线介质准备（在可上网的资源准备机执行）
 
-## 4. 离线介质准备（在可上网的资源准备机执行）
-
-### 4.1 文件清单与上传
-
-统一上传到 `${FILE_URL}`，部署前逐个确认可下载（HTTP 200）。资源准备可用工程仓库 CI（`download-artifacts.yml`）自动完成，`scripts/package-offline.sh` 展开为下表文件名（`SHA256SUMS` 路径同步展平为文件名）：
+**文件清单与上传**：统一上传到 `${FILE_URL}`，部署前逐个确认可下载（HTTP 200）。资源准备可用工程仓库 CI（`download-artifacts.yml`）自动完成，`scripts/package-offline.sh` 展开为下表文件名（`SHA256SUMS` 路径同步展平为文件名）：
 
 | 文件 | 用于章节 | 来源 |
 |---|---|---|
-| `containerd-2.3.0-linux-amd64.tar.gz` | 7.1 | GitHub containerd v2.3.0 release |
-| `containerd.service` | 7.1 | containerd v2.3.0 源码仓库 |
-| `runc.amd64`、`runc.sha256sum` | 7.3 | GitHub runc v1.4.2 release（runc 另对照上游 sha256sum） |
-| `nerdctl-2.3.0-linux-amd64.tar.gz` | 7.4 | GitHub nerdctl v2.3.0 release |
-| `helm-v3.22.1-linux-amd64.tar.gz` | 8.7 | get.helm.sh |
-| `Release.key` | 8.1 | `pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key`；**上传时记录 sha256 与 GPG 指纹** |
-| `harbor-ca.crt` | 7.2 | 本集群 Harbor 私有 CA 证书（集群专属，不入工程仓库） |
-| `SHA256SUMS` | 4.1 | 工程仓库 `artifacts/checksums/SHA256SUMS`（CI 生成，覆盖上表仓库内全部文件） |
-| `tigera-operator-v3.32.0.tgz` | 9 | Calico 官方 Operator Chart |
-| `crd.projectcalico.org.v1-v3.32.0.tgz` | 9 | Calico 官方 **CRD Chart（必备，勿漏）** |
-| `metallb-0.15.3.tgz` | 10 | MetalLB 官方 Chart |
-| `gateway-helm-v1.7.1.tgz` | 11 | `oci://docker.io/envoyproxy/gateway-helm` |
-| `calico-3.32.0.yaml`、`metallb-native-v0.15.3.yaml`、`envoy-gateway-install-v1.7.1.yaml` | 9/10/11 | 上游 manifest（仅 chart 安装失败时手工 apply 兜底，镜像需已在 Harbor） |
-
-检查命令：
+| `containerd-2.3.0-linux-amd64.tar.gz` | 4.1 | GitHub containerd v2.3.0 release |
+| `containerd.service` | 4.1 | containerd v2.3.0 源码仓库 |
+| `runc.amd64`、`runc.sha256sum` | 4.3 | GitHub runc v1.4.2 release（runc 另对照上游 sha256sum） |
+| `nerdctl-2.3.0-linux-amd64.tar.gz` | 4.4 | GitHub nerdctl v2.3.0 release |
+| `helm-v3.22.1-linux-amd64.tar.gz` | 5.7 | get.helm.sh |
+| `Release.key` | 5.1 | `pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key`；**上传时记录 sha256 与 GPG 指纹** |
+| `harbor-ca.crt` | 4.2 | 本集群 Harbor 私有 CA 证书（集群专属，不入工程仓库） |
+| `SHA256SUMS` | 1.6 | 工程仓库 `artifacts/checksums/SHA256SUMS`（CI 生成，覆盖上表仓库内全部文件） |
+| `tigera-operator-v3.32.0.tgz` | 6 | Calico 官方 Operator Chart |
+| `crd.projectcalico.org.v1-v3.32.0.tgz` | 6 | Calico 官方 **CRD Chart（必备，勿漏）** |
+| `metallb-0.15.3.tgz` | 7 | MetalLB 官方 Chart |
+| `gateway-helm-v1.7.1.tgz` | 8 | `oci://docker.io/envoyproxy/gateway-helm` |
+| `calico-3.32.0.yaml`、`metallb-native-v0.15.3.yaml`、`envoy-gateway-install-v1.7.1.yaml` | 6/7/8 | 上游 manifest（仅 chart 安装失败时手工 apply 兜底，镜像需已在 Harbor） |
 
 ```bash
 for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.sha256sum \
@@ -277,17 +198,15 @@ for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.
 done
 ```
 
-### 4.2 镜像清单与推送 Harbor
-
-所有镜像推到 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取。清单已对照各 chart 实际 values 与上游源码核实（详见 DECISIONS.md）：
+**镜像清单与推送 Harbor**：所有镜像推到 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取。清单已对照各 chart 实际 values 与上游源码核实（详见 DECISIONS.md）：
 
 | 类别 | 镜像（全部推 `${REGISTRY}`） | 章节 |
 |---|---|---|
-| K8s 系统 | `kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}` 的全部输出（含 pause:3.10.2） | 8.3 |
-| Calico | `tigera/operator:v1.42.0`；`calico/` 下 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`（均 `:v3.32.0`）。CSI 默认关闭、goldmane/whisker 已禁用，相关镜像不需推送 | 9.3 |
-| MetalLB | `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`、`frrouting/frr:10.4.1`（speaker 内置 FRR sidecar） | 10 |
-| Envoy Gateway | `envoyproxy/gateway:v1.7.1`（控制面 + certgen Job 共用）、`envoyproxy/envoy:distroless-v1.37.1`（数据面，11.3 指定）。限流未启用，ratelimit 不推 | 11 |
-| 验收用 | busybox（版本自定） | 12 |
+| K8s 系统 | `kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}` 的全部输出（含 pause:3.10.2） | 5.3 |
+| Calico | `tigera/operator:v1.42.0`；`calico/` 下 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`（均 `:v3.32.0`）。CSI 默认关闭、goldmane/whisker 已禁用，相关镜像不需推送 | 6.3 |
+| MetalLB | `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`、`frrouting/frr:10.4.1`（speaker 内置 FRR sidecar） | 7 |
+| Envoy Gateway | `envoyproxy/gateway:v1.7.1`（控制面 + certgen Job 共用）、`envoyproxy/envoy:distroless-v1.37.1`（数据面，8.3 指定）。限流未启用，ratelimit 不推 | 8 |
+| 验收用 | busybox（版本自定） | 9 |
 
 推送方式（资源准备机，需能访问公网源与 Harbor）：
 
@@ -298,37 +217,18 @@ nerdctl tag registry.k8s.io/pause:3.10.2 ${REGISTRY}/pause:3.10.2
 nerdctl push ${REGISTRY}/pause:3.10.2
 ```
 
-### 4.3 apt 源与系统包
+**apt 源与系统包**：
 
-- k8s 源：内网 apt 镜像站镜像 `pkgs.k8s.io/core:/stable:/v1.36/deb/`，公钥 `Release.key`（指纹核对见 8.1）。
+- k8s 源：内网 apt 镜像站镜像 `pkgs.k8s.io/core:/stable:/v1.36/deb/`，公钥 `Release.key`（指纹核对见 5.1）。
 - 系统包（haproxy、keepalived、chrony、nftables、gettext-base 等）：内网 Ubuntu 镜像站，不入工程仓库。
 
-### 4.4 仓库归档名与上传文件名映射
-
-| 工程仓库内 | `${FILE_URL}` 文件名 |
-|---|---|
-| `binaries/amd64/containerd/2.3.0/containerd-2.3.0-linux-amd64.tar.gz` | 同名 |
-| `binaries/amd64/runc/1.4.2/runc.amd64`、`runc.sha256sum` | 同名 |
-| `binaries/amd64/nerdctl/2.3.0/nerdctl-2.3.0-linux-amd64.tar.gz` | 同名 |
-| `tools/helm/3.22.1/helm-v3.22.1-linux-amd64.tar.gz` | 同名 |
-| `checksums/SHA256SUMS` | `SHA256SUMS`（路径展平为文件名） |
-| `templates/systemd/containerd.service.j2` | `containerd.service` |
-| `keys/kubernetes/Release.key` | 同名 |
-| `charts/calico/3.32.0/tigera-operator-v3.32.0.tgz` | 同名 |
-| `charts/calico/3.32.0/crd.projectcalico.org.v1-v3.32.0.tgz` | 同名 |
-| `charts/metallb/0.15.3/metallb-0.15.3.tgz` | 同名 |
-| `charts/envoy-gateway/1.7.1/gateway-helm-v1.7.1.tgz` | 同名 |
-| `manifests/calico/3.32.0/calico.yaml` | `calico-3.32.0.yaml` |
-| `manifests/metallb/0.15.3/metallb-native.yaml` | `metallb-native-v0.15.3.yaml` |
-| `manifests/envoy-gateway/1.7.1/envoy-gateway-install.yaml` | `envoy-gateway-install-v1.7.1.yaml` |
-
-由 `scripts/package-offline.sh` 自动完成展开。`harbor-ca.crt` 为集群专属（内网 Harbor 私有 CA），不在工程仓库归档，由 Harbor 管理员提供后随 `dist/offline-files` 一并上传。
+工程仓库归档名与 `${FILE_URL}` 文件名的对应由 `scripts/package-offline.sh` 自动展开（映射表见仓库 `artifacts/README.md`）。`harbor-ca.crt` 为集群专属（内网 Harbor 私有 CA），不在工程仓库归档，由 Harbor 管理员提供后随 `dist/offline-files` 一并上传。
 
 ---
 
-## 5. 操作系统基线（所有节点）
+## 2. 操作系统基线（所有节点）
 
-### 5.1 主机名、解析、内网路由与唯一性
+### 2.1 主机名、解析、内网路由与唯一性
 
 ```bash
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-master01    # 按本节点改
@@ -369,7 +269,7 @@ cat /etc/machine-id                # 各节点必须互不相同；重复时：
 # rm -f /etc/machine-id /var/lib/dbus/machine-id && systemd-machine-id-setup && reboot
 ```
 
-### 5.2 内核模块与 sysctl
+### 2.2 内核模块与 sysctl
 
 ```bash
 cat << EOF | tee /etc/modules-load.d/k8s.conf
@@ -404,7 +304,7 @@ sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
 - `fs.inotify` 三项：内核默认 instances=128、watches 通常 8192–65536，K8s 节点上 kubelet/cAdvisor、容器进程、日志与配置监听极易耗尽，症状是 Pod 内 `too many open files` / inotify `ENOSPC`、事件丢失；8192/1048576/65536 为集群常规取值（全局参数，不分 netns）。
 - IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（nf_conntrack_max 等）保持默认。
 
-### 5.3 nftables 工具（只装命令行，服务禁用并 mask）
+### 2.3 nftables 工具（只装命令行，服务禁用并 mask）
 
 kube-proxy nftables 模式自行管理 `ip kube-proxy` 表，不依赖 nftables.service；该服务反而是危险对象（Ubuntu 24.04 实测，`systemctl cat nftables`）：
 
@@ -421,7 +321,7 @@ nf_conntrack
 EOF
 modprobe nf_tables && modprobe nf_nat && modprobe nf_conntrack
 
-apt install -y nftables                 # 只为 nft 命令行（8.6 验证、附录 C 清理用）
+apt install -y nftables                 # 只为 nft 命令行（5.6 验证、附录 C 清理用）
 systemctl is-enabled nftables           # 应 disabled；若 enabled 只 disable，绝不加 --now（--now 触发 stop=清空规则）
 systemctl mask nftables
 
@@ -432,7 +332,7 @@ systemctl is-active ufw                 # 记录结果：ufw 走 iptables-nft �
 
 自定义规则用独立 table（`nft add table ...`），任何时候禁止 `flush ruleset`（包括排障和清理，见附录 C）。
 
-### 5.4 关闭 swap
+### 2.4 关闭 swap
 
 ```bash
 swapoff -a
@@ -440,7 +340,7 @@ sed -i 's|^/swap.img|#/swap.img|' /etc/fstab
 free -h | grep -i swap               # 应为 0
 ```
 
-### 5.5 内核固定与锁定、关闭自动更新
+### 2.5 内核固定与锁定、关闭自动更新
 
 ```bash
 KVER=6.8.0-149-generic
@@ -497,7 +397,7 @@ systemctl disable --now apt-daily-upgrade.timer
 
 固定内核不再收安全更新，需定期评估升级。
 
-### 5.6 DNS（systemd-resolved）
+### 2.6 DNS（systemd-resolved）
 
 kubelet 从 `/run/systemd/resolve/resolv.conf` 读上游 DNS，缺失会报错：
 
@@ -507,9 +407,9 @@ ls -l /run/systemd/resolve/resolv.conf    # 正常则跳过；否则：
 # apt install -y systemd-resolved && systemctl enable --now systemd-resolved
 ```
 
-### 5.7 时间同步（chrony）
+### 2.7 时间同步（chrony）
 
-证书、etcd、token 都依赖时钟一致；离线环境统一 chrony，指向内网 NTP 服务器（变量 `NTP_SERVER`，2.2）：
+证书、etcd、token 都依赖时钟一致；离线环境统一 chrony，指向内网 NTP 服务器（变量 `NTP_SERVER`，1.3）：
 
 ```bash
 
@@ -529,7 +429,7 @@ chronyc tracking | grep -E 'System time|Stratum'
 timedatectl | grep synchronized    # 应为 yes
 ```
 
-### 5.8 journald 容量限制
+### 2.8 journald 容量限制
 
 ```bash
 mkdir -p /etc/systemd/journald.conf.d
@@ -549,19 +449,19 @@ systemd-analyze cat-config systemd/journald.conf | grep -v '^#' | grep -v '^$'
 journalctl --disk-usage
 ```
 
-### 5.9 存储（沿用现有配置）
+### 2.9 存储（沿用现有配置）
 
-本文不安装/配置 NFS/autofs，不定义挂载路径与参数，不创建 StorageClass/PVC，不部署 NFS CSI；只要求存储流量按 2.5 走内网。各套存储以对应存储部署文档为准。
+本文不安装/配置 NFS/autofs，不定义挂载路径与参数，不创建 StorageClass/PVC，不部署 NFS CSI；只要求存储流量按 1.2 走内网。各套存储以对应存储部署文档为准。
 
 ---
 
-## 6. 高可用入口：keepalived + HAProxy（仅 master）
+## 3. 高可用入口：keepalived + HAProxy（仅 master）
 
 3 台 master 均部署。两个 VRRP 实例独立漂移，HAProxy 的两个 frontend 分别绑内网 VIP 和外网 VIP 的 16443，后端同为 3 台 master 的 6443。
 
-第 6 章不依赖任何外部变量文件。所有参数集中在 6.0 的一个变量块里，**每台 master 在同一个终端里先粘贴这个块**，后面的命令直接引用这些 shell 变量。换了终端或重连后，需要重新粘贴 6.0。
+第 3 章不依赖任何外部变量文件。所有参数集中在 3.0 的一个变量块里，**每台 master 在同一个终端里先粘贴这个块**，后面的命令直接引用这些 shell 变量。换了终端或重连后，需要重新粘贴 3.0。
 
-### 6.0 变量块（每台都要粘贴，前半部分三台相同，后半部分按节点改）
+### 3.0 变量块（每台都要粘贴，前半部分三台相同，后半部分按节点改）
 
 ```bash
 # ===== 三台相同的部分 =====
@@ -595,7 +495,7 @@ echo "NODE_IFACE=${NODE_IFACE}  EXT_IFACE=${EXT_IFACE}  ALLOWED=${EXT_API_ALLOWE
 [ -n "${STATS_AUTH#*:}" ] && [ "${STATS_AUTH}" != "admin:ChangeMe" ] || echo "STATS_AUTH 未设置强密码"
 [ "${#KA_AUTH_PASS}" -ge 1 ] && [ "${#KA_AUTH_PASS}" -le 8 ] || echo "KA_AUTH_PASS 为空或超 8 位"
 ip -4 -o addr show dev ${NODE_IFACE} | grep -q " ${NODE_IP}/" || echo "NODE_IP 不在 ${NODE_IFACE} 上，请核对"
-[ "$(sysctl -n net.ipv4.ip_nonlocal_bind)" = 1 ] || echo "ip_nonlocal_bind 未生效，HAProxy 绑 VIP 会失败（见 5.2）"
+[ "$(sysctl -n net.ipv4.ip_nonlocal_bind)" = 1 ] || echo "ip_nonlocal_bind 未生效，HAProxy 绑 VIP 会失败（见 2.2）"
 ```
 
 对照表（三台只有这一处不同）：
@@ -612,14 +512,14 @@ ip -4 -o addr show dev ${NODE_IFACE} | grep -q " ${NODE_IP}/" || echo "NODE_IP �
 timeout 10 tcpdump -ni ${NODE_IFACE} vrrp 2>/dev/null | head
 ```
 
-### 6.1 安装软件包
+### 3.1 安装软件包
 
 ```bash
 apt install -y keepalived haproxy
 systemctl stop keepalived haproxy 2>/dev/null     # 配置完成前先不启动
 ```
 
-### 6.2 HAProxy 配置（三台完全一致）
+### 3.2 HAProxy 配置（三台完全一致）
 
 ```bash
 cat > /etc/haproxy/haproxy.cfg <<EOF
@@ -687,7 +587,7 @@ haproxy -c -f /etc/haproxy/haproxy.cfg  # 必须显示 Configuration file is val
 
 只有 `bind ${NODE_IP}:8888` 一行因本机 IP 而不同，其余三台一致。
 
-### 6.3 健康检查脚本（三台完全一致）
+### 3.3 健康检查脚本（三台完全一致）
 
 端口直接写进脚本，运行时不依赖任何变量：
 
@@ -717,7 +617,7 @@ cat /etc/keepalived/check-haproxy.sh      # 确认端口已展开为数字
 
 脚本在 HAProxy 异常时会 `stop keepalived`，两个 VIP 一起迁走，**不会自动恢复**。HAProxy 修好后要人工 `systemctl start keepalived`，写进运维手册。
 
-### 6.4 keepalived 配置
+### 3.4 keepalived 配置
 
 ```bash
 cat > /etc/keepalived/keepalived.conf <<EOF
@@ -800,7 +700,7 @@ grep -E 'router_id|state|priority' /etc/keepalived/keepalived.conf    # 核对�
     }
 ```
 
-### 6.5 启动顺序与 systemd 依赖
+### 3.5 启动顺序与 systemd 依赖
 
 给 keepalived 加启动顺序依赖，避免开机时 HAProxy 还没起来，检查脚本就把 keepalived 停掉：
 
@@ -830,7 +730,7 @@ systemctl enable --now keepalived
 apt-mark hold keepalived haproxy
 ```
 
-### 6.6 验证（init 前必须通过）
+### 3.6 验证（init 前必须通过）
 
 ```bash
 # ① VIP 持有者（此时只有 master01 有输出）
@@ -858,15 +758,15 @@ curl -su "${STATS_AUTH}" "http://${NODE_IP}:8888/stats;csv" | cut -d, -f1,2,18 |
 
 此时后端 6443 尚未启动，健康检查全部失败属正常。先确认 VIP 漂移和监听都对，再到 master01 执行 `kubeadm init`。
 
-### 6.7 遗留风险
+### 3.7 遗留风险
 
-6443 仍然监听所有地址，外网 master IP:6443 能绕过 HAProxy 的 ACL，需要用节点 nft 过滤或网络侧 ACL 关掉；第 3 章防火墙表已补"所有节点与 Pod → 3 台 master 内网 IP 的 TCP 6443"一行。
+6443 仍然监听所有地址，外网 master IP:6443 能绕过 HAProxy 的 ACL，需要用节点 nft 过滤或网络侧 ACL 关掉；1.5 节防火墙表已补"所有节点与 Pod → 3 台 master 内网 IP 的 TCP 6443"一行。
 
 ---
 
-## 7. 容器运行时（所有节点）
+## 4. 容器运行时（所有节点）
 
-### 7.1 安装 containerd 2.3.0
+### 4.1 安装 containerd 2.3.0
 
 ```bash
 mkdir -p /data/package && cd /data/package
@@ -887,7 +787,7 @@ containerd config default > /etc/containerd/config.toml
 systemctl daemon-reload && systemctl enable --now containerd
 ```
 
-### 7.2 config.toml 关键项与 Harbor 访问
+### 4.2 config.toml 关键项与 Harbor 访问
 
 ```bash
 # ① sandbox 镜像 → Harbor（sed 按镜像字符串替换，不依赖键名；
@@ -919,7 +819,7 @@ EOF
 - 以上键位在 containerd 2.3.0 的实际生成配置中**待逐项验证**，以 `crictl pull` 实测为准（附录 B）。
 - 私有项目认证：`${REGISTRY}` 项目设公开；业务仓库私有，用 `imagePullSecrets` / `nerdctl login`。
 
-### 7.3 安装 runc 1.4.2
+### 4.3 安装 runc 1.4.2
 
 ```bash
 cd /data/package
@@ -928,10 +828,10 @@ grep ' runc.amd64$' runc.sha256sum | sha256sum -c -     # 对照上游官方清�
 apt remove -y runc 2>/dev/null || true         # 若装过 apt 版
 install -m 755 runc.amd64 /usr/local/sbin/runc
 which -a runc && runc --version                # 1.4.2，首选 /usr/local/sbin
-systemctl restart containerd                   # 使 7.1/7.2 配置生效（kubelet 未起，顺序无碍）
+systemctl restart containerd                   # 使 4.1/4.2 配置生效（kubelet 未起，顺序无碍）
 ```
 
-### 7.4 安装 nerdctl 2.3.0
+### 4.4 安装 nerdctl 2.3.0
 
 ```bash
 cd /data/package
@@ -944,11 +844,11 @@ nerdctl --namespace k8s.io pull ${REGISTRY}/pause:3.10.2   # 顺带验证 Harbor
 
 ---
 
-## 8. kubeadm：组件安装、初始化与节点加入
+## 5. kubeadm：组件安装、初始化与节点加入
 
-### 8.1 安装 kubelet / kubeadm / kubectl（所有节点）
+### 5.1 安装 kubelet / kubeadm / kubectl（所有节点）
 
-签名公钥来自内网站，信任链只靠镜像站，安装前必须核对指纹（与 4.1 上传记录、官方发布页一致）：
+签名公钥来自内网站，信任链只靠镜像站，安装前必须核对指纹（与 1.6 上传记录、官方发布页一致）：
 
 ```bash
 mkdir -p /etc/apt/keyrings
@@ -969,7 +869,7 @@ echo "KUBELET_EXTRA_ARGS=--node-ip=${NODE_IP}" > /etc/default/kubelet
 cat /etc/default/kubelet
 ```
 
-### 8.2 配置 crictl
+### 5.2 配置 crictl
 
 cri-tools 随 kubeadm 依赖自动安装（kubeadm 预检也要求 crictl 在 PATH），但 `/etc/crictl.yaml` 不会自动生成：
 
@@ -985,15 +885,15 @@ EOF
 crictl info | head    # crictl 与 nerdctl -n k8s.io 看到同一命名空间，可互相核对
 ```
 
-### 8.3 确认初始化镜像
+### 5.3 确认初始化镜像
 
 ```bash
 kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}
 # 每一条都必须已存在于 Harbor；pause 版本应与 7.2 一致
-crictl pull ${REGISTRY}/pause:3.10.2    # 验证 7.2 Harbor 访问已生效
+crictl pull ${REGISTRY}/pause:3.10.2    # 验证 4.2 Harbor 访问已生效
 ```
 
-### 8.4 kubeadm 配置（v1beta4）
+### 5.4 kubeadm 配置（v1beta4）
 
 kubeadm YAML 不读环境变量：先写模板 `kubeadm-config.yaml.tpl`（内容即下文，本文为唯一权威版本），再 `envsubst` 生成：
 
@@ -1078,7 +978,7 @@ grep -E 'advertiseAddress|name:|imageRepository|controlPlaneEndpoint|podSubnet|V
 grep -A1 nodePortAddresses kubeadm-config.yaml    # 无空串才继续
 ```
 
-### 8.5 执行初始化（master01）
+### 5.5 执行初始化（master01）
 
 ```bash
 kubeadm init --config kubeadm-config.yaml --upload-certs | tee kubeadm-init.log
@@ -1090,7 +990,7 @@ chmod 600 ~/.kube/config
 kubectl get nodes
 ```
 
-### 8.6 验证 kube-proxy 与证书
+### 5.6 验证 kube-proxy 与证书
 
 ```bash
 kubectl -n kube-system get cm kube-proxy -o yaml | grep "mode:"            # nftables
@@ -1102,7 +1002,7 @@ kubectl get nodes -o wide             # INTERNAL-IP 应为内网 IP（非 VIP、
 ss -lntp | grep -E ':(6443|2379|2380|10250)'
 ```
 
-### 8.7 安装 Helm（master）
+### 5.7 安装 Helm（master）
 
 ```bash
 cd /data/package
@@ -1113,7 +1013,7 @@ install -m 755 linux-amd64/helm /usr/local/bin/helm
 helm version        # ≥3.8；master02/03 加入后同样执行
 ```
 
-### 8.8 master02 / master03 加入（control-plane）
+### 5.8 master02 / master03 加入（control-plane）
 
 密钥管理：
 
@@ -1124,7 +1024,7 @@ kubeadm token create --print-join-command          # token + hash
 # token/hash/key 均敏感，不写入文档、不入仓库
 ```
 
-在 master02 / master03 分别执行（确认 8.1 的 `/etc/default/kubelet` 已写好）：
+在 master02 / master03 分别执行（确认 5.1 的 `/etc/default/kubelet` 已写好）：
 
 ```bash
 export NODE_NAME=${CLUSTER_PREFIX}-k8s-master02     # master03 相应改
@@ -1139,7 +1039,7 @@ kubeadm certs check-expiration       # 同为约 10 年
 
 `--apiserver-advertise-address` 必须加：双网卡下 kubeadm 可能选到外网 IP，etcd peer 会用错地址（排障见附录 C）。
 
-### 8.9 worker 加入
+### 5.9 worker 加入
 
 ```bash
 # master 上（只需 token+hash，无需 certificate-key）
@@ -1167,11 +1067,11 @@ grep -nE 'maxPods|kubeReserved|systemReserved|enforceNodeAllocatable|evictionHar
 
 ---
 
-## 9. Calico v3.32.0（官方 Helm，两件套 Chart）
+## 6. Calico v3.32.0（官方 Helm，两件套 Chart）
 
 两个 chart 缺一不可，分工明确：**CRD Chart**（`crd.projectcalico.org.v1`，含 `operator.tigera.io` + `crd.projectcalico.org` 两组 CRD）负责 CRD 的提供与升级；**Operator Chart** 以 `manageCRDs: false` 安装，operator 不再自装 CRD，避免与 helm 双头管理。聚合 API Server 模式（`apiServer.enabled: true`，kubectl 可直接管理 projectcalico.org/v3 资源）；原生 v3 CRD chart 在 3.32 为技术预览，不装、也不与两件套混用。
 
-### 9.1 准备 Chart
+### 6.1 准备 Chart
 
 资源准备机（或工程仓库 CI）：
 
@@ -1182,7 +1082,7 @@ helm pull projectcalico/tigera-operator --version v3.32.0 --destination ./charts
 # 上传两个 tgz 到 ${FILE_URL}（见 4.1）
 ```
 
-### 9.2 安装 CRD Chart
+### 6.2 安装 CRD Chart
 
 ```bash
 mkdir -p /data/package/charts && cd /data/package/charts
@@ -1197,11 +1097,11 @@ helm template calico-crds ./crd.projectcalico.org.v1-v3.32.0.tgz \
 kubectl create namespace tigera-operator --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 9.3 values 与镜像核对（强制）
+### 6.3 values 与镜像核对（强制）
 
 ```bash
 cat > calico-values.yaml <<EOF
-manageCRDs: false                     # CRD 已由 9.2 提供，operator 不再自装
+manageCRDs: false                     # CRD 已由 6.2 提供，operator 不再自装
 installation:
   enabled: true
   registry: ${REGISTRY}/              # Installation CRD 要求结尾斜杠
@@ -1232,10 +1132,10 @@ helm template calico ./tigera-operator-v3.32.0.tgz -n tigera-operator -f calico-
 ```
 
 - `imagePath` 保持不设：各组件默认路径即 `calico/`，设了反而改变拼装结果。
-- 渲染中只出现 `${REGISTRY}/tigera/operator:v1.42.0` 一处 image；calico 组件镜像由 operator 运行时按 `installation.registry` 拼装，离线清单见 4.2，安装后按 9.6 复核。
+- 渲染中只出现 `${REGISTRY}/tigera/operator:v1.42.0` 一处 image；calico 组件镜像由 operator 运行时按 `installation.registry` 拼装，离线清单见 1.6，安装后按 6.6 复核。
 - goldmane/whisker（chart 默认启用）必须显式关闭，否则离线环境拉 `calico/goldmane`、`calico/whisker` 失败。
 
-### 9.4 安装 Operator 与验证
+### 6.4 安装 Operator 与验证
 
 ```bash
 helm upgrade --install calico ./tigera-operator-v3.32.0.tgz -n tigera-operator -f calico-values.yaml
@@ -1244,7 +1144,7 @@ kubectl get tigerastatus               # calico、apiserver 均 Available=True�
 kubectl get apiservice v3.projectcalico.org    # True（聚合 API 就绪）
 ```
 
-### 9.5 BGP full-mesh（只验证，不手动创建）
+### 6.5 BGP full-mesh（只验证，不手动创建）
 
 Node-to-Node Mesh 是默认值，不部署 RR，不手动创建 BGPConfiguration：
 
@@ -1256,7 +1156,7 @@ kubectl get ippools.projectcalico.org -o yaml    # cidr=${POD_CIDR}、blockSize 
 
 约 51 节点全互联 ≈ 1275 对邻居：上线前实测所有节点内网 TCP 179 互通与 IPIP（IP 协议 4）可达，并评估扩容对 BGP 控制面的影响（待验证）。
 
-### 9.6 验证
+### 6.6 验证
 
 ```bash
 kubectl get pods -n calico-system -o wide
@@ -1267,9 +1167,9 @@ kubectl get nodes -o wide                     # 节点 IP 均为内网 IP
 
 ---
 
-## 10. MetalLB v0.15.3（官方 Helm，L2 模式）
+## 7. MetalLB v0.15.3（官方 Helm，L2 模式）
 
-### 10.1 Chart 与 values（镜像离线覆盖）
+### 7.1 Chart 与 values（镜像离线覆盖）
 
 L2 模式无必改功能项（`crds.enabled` 默认 true，CRD 随 chart 安装）；speaker 自带 FRR sidecar（0.15 起与 speaker 同 Pod、不可关闭），离线只需把三处镜像指向内网：
 
@@ -1289,7 +1189,7 @@ speaker:
 EOF
 ```
 
-### 10.2 安装（speaker 需特权，PSA 放行）
+### 7.2 安装（speaker 需特权，PSA 放行）
 
 ```bash
 cd /data/package/charts
@@ -1311,7 +1211,7 @@ kubectl -n metallb-system rollout status daemonset/metallb-speaker --timeout=5m
 
 release 名 `metallb` 时资源名为 `metallb-controller`/`metallb-speaker`；release 名不同前缀随之变化。
 
-### 10.3 外网地址池
+### 7.3 外网地址池
 
 `autoAssign: false`：只有显式指定 pool-ext 的 Service 才用池内地址，防止误占入口 IP。`${METALLB_EXT_RANGE}` 必须在外网网卡二层段内且未被占用：
 
@@ -1346,11 +1246,11 @@ nftables 模式无需 strictARP 设置；同一 Service 入口流量只落一台
 
 ---
 
-## 11. Envoy Gateway v1.7.1（官方 OCI Helm Chart）
+## 8. Envoy Gateway v1.7.1（官方 OCI Helm Chart）
 
-### 11.1 Chart、values 与镜像核对（强制）
+### 8.1 Chart、values 与镜像核对（强制）
 
-chart 单键 `global.imageRegistry` 同时覆盖控制面与 certgen Job；数据面镜像不在 chart 内，由 EnvoyProxy 资源指定（11.3）：
+chart 单键 `global.imageRegistry` 同时覆盖控制面与 certgen Job；数据面镜像不在 chart 内，由 EnvoyProxy 资源指定（8.3）：
 
 ```bash
 cd /data/package/charts
@@ -1367,7 +1267,7 @@ helm template eg ./gateway-helm-v1.7.1.tgz -n envoy-gateway-system -f envoy-gate
 # 数据面 envoy 不在此渲染内，确认 distroless-v1.37.1 已按 4.2 推送
 ```
 
-### 11.2 安装
+### 8.2 安装
 
 ```bash
 helm upgrade --install eg ./gateway-helm-v1.7.1.tgz \
@@ -1375,7 +1275,7 @@ helm upgrade --install eg ./gateway-helm-v1.7.1.tgz \
 kubectl wait --timeout=5m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available
 ```
 
-### 11.3 EnvoyProxy + GatewayClass
+### 8.3 EnvoyProxy + GatewayClass
 
 ```bash
 cat > envoy-gatewayclass.yaml <<EOF
@@ -1416,7 +1316,7 @@ kubectl apply -f envoy-gatewayclass.yaml && kubectl get gatewayclass eg
 
 `GW_EXT_IP` 必须属于 `${METALLB_EXT_RANGE}`；保持 `externalTrafficPolicy: Cluster`，不做源 IP 保留。
 
-### 11.4 入口 Gateway（仅 HTTP 80）
+### 8.4 入口 Gateway（仅 HTTP 80）
 
 ```bash
 cat > envoy-gateway.yaml << 'EOF'
@@ -1443,7 +1343,7 @@ kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template
 
 ---
 
-## 12. 部署后验收清单
+## 9. 部署后验收清单
 
 在任一 master 逐项检查，全部通过再交付：
 
@@ -1461,7 +1361,7 @@ kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template
 | Calico | `kubectl get tigerastatus; kubectl get ippools.projectcalico.org -o yaml` | 均 Available；IPIP Always、/25、natOutgoing true；镜像来自 `${REGISTRY}/calico/` |
 | VIP 高可用 | 停持有者 haproxy | 两个 VIP 均迁移（可落不同 master）；授权/非授权网段访问测试符合预期 |
 | kubelet 配置 | `grep ... /var/lib/kubelet/config.yaml` | maxPods 110、预留、驱逐（含 inodesFree）、日志轮转与本文一致 |
-| journald | `grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf` | 4G（5.8 值一致） |
+| journald | `grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf` | 4G（2.8 值一致） |
 | MetalLB/Gateway | `kubectl get svc -n envoy-gateway-system` | EXTERNAL-IP = `${GW_EXT_IP}` |
 | etcd | `kubectl -n kube-system exec etcd-<节点> -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key endpoint health --cluster` | 全部 healthy |
 
@@ -1482,7 +1382,7 @@ kubectl delete pod net-a net-b
 
 ---
 
-## 13. 附录
+## 10. 附录
 
 ### A. 本次不部署的内容与责任边界
 
@@ -1502,28 +1402,28 @@ kubectl delete pod net-a net-b
 
 ### B. 待验证事项清单（完成前本文不等同于最终生产手册）
 
-环境参数类：各集群登记表（2.2）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 6.4 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`NTP_SERVER`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
+环境参数类：各集群登记表（1.3）、`KA_STATE`/`KA_PRIORITY`/VRID/密码、内外二层是否允许 VRRP 组播（禁则用 3.4 单播变体）、`NODE_IFACE` 正则匹配所有节点、`METALLB_EXT_RANGE` 与 `GW_EXT_IP`、`NTP_SERVER`、`EXTRA_NETS`、`Release.key` 指纹、`harbor-ca.crt` 分发。
 
 版本与网络实测类：
 - kubeadm v1beta4 证书有效期字段在 1.36.6 的实际生效（`certs check-expiration`）。
 - containerd 2.3.0 config.toml（version 3）各键位：sandbox_image/pinned_images、SystemdCgroup、config_path、certs.d hosts.toml 与私有 CA。
 - Calico：两件套 chart 在 1.36.6 的安装与 `tigerastatus`；51 节点 BGP mesh 邻居建立、TCP 179/IPIP 连通与控制面资源；`calicoctl node status` 等效检查；同层组网时 CrossSubnet 对比评估。
 - MetalLB 0.15.3：L2 免费 ARP 是否被外网交换机拦截。
-- Envoy Gateway 1.7.1：EnvoyProxy 数据面镜像生效核对（11.4）、外网→Pod 全链路。
+- Envoy Gateway 1.7.1：EnvoyProxy 数据面镜像生效核对（8.4）、外网→Pod 全链路。
 - HAProxy httpchk 与后端 apiserver 的兼容实测；VIP 漂移三类场景（haproxy 死亡、外网层故障、抢占恢复）。
 - 版本组合（containerd 2.3.0/runc 1.4.2/nerdctl 2.3.0/Calico 3.32.0/EG 1.7.1/MetalLB 0.15.3/内核 6.8.0-149）存在性与兼容性逐一对照官方 release。
 
 ### C. 常见问题与排障（含 1.26.3 时期经验）
 
 - **CRI 不可用 / v1 runtime API not implemented**：`containerd config default` 重新生成配置，确认 SystemdCgroup=true 后重启 containerd。
-- **etcd peer 用了外网 IP**：join 未加 `--apiserver-advertise-address`。预防：8.8 必加；修复：drain → delete node → `etcdctl member remove` → reset 后重新 join。
+- **etcd peer 用了外网 IP**：join 未加 `--apiserver-advertise-address`。预防：5.8 必加；修复：drain → delete node → `etcdctl member remove` → reset 后重新 join。
 - **join 连接拒绝**：`systemctl status haproxy keepalived`、`ip addr | grep <VIP>`、`nc -zv ${VIP} 16443`、`curl -k https://${VIP}:${VIP_PORT}/healthz`。
 - **CNI 未初始化**：`ls /opt/cni/bin /etc/cni/net.d`，重启 kubelet，删 calico-node pod 重建。
-- **Calico 节点 IP 选错**：检查 9.3 的 `nodeAddressAutodetectionV4.interface`。
+- **Calico 节点 IP 选错**：检查 6.3 的 `nodeAddressAutodetectionV4.interface`。
 - **主机名不统一**：所有 join 必须 `--node-name`。
 - **Pod Pending（污点）**：业务配容忍或调度到 worker；不建议移除 master 污点。
 - **镜像 401（Harbor 私有项目）**：`${REGISTRY}` 设公开；业务仓库用 imagePullSecrets 或 nerdctl login 后预拉。
-- **证书尚未生效**：时钟不同步，检查 5.7。
+- **证书尚未生效**：时钟不同步，检查 2.7。
 
 **清理重来（kubeadm reset）**——仅部署失败/下线节点使用：
 
