@@ -382,8 +382,9 @@ cat /etc/machine-id                # 各节点必须互不相同；重复时：
 cat << EOF | tee /etc/modules-load.d/k8s.conf
 overlay
 br_netfilter
+ipip
 EOF
-modprobe overlay && modprobe br_netfilter
+modprobe overlay && modprobe br_netfilter && modprobe ipip   # ipip：Calico IPIP 封装（tunl0）必需
 
 cat << EOF | tee /etc/sysctl.d/k8s.conf
 net.bridge.bridge-nf-call-ip6tables = 1
@@ -394,11 +395,16 @@ net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.default.rp_filter = 2
 EOF
 sysctl --system
-sysctl -a 2>/dev/null | grep '\.rp_filter'   # 内外网卡的值也不能是 1
+sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
+       net.ipv4.ip_forward net.ipv4.ip_nonlocal_bind \
+       net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter
+# 期望依次为 1 1 1 1 2 2，任何一项不符先解决再继续
 ```
 
 - `ip_nonlocal_bind=1`：HAProxy 显式绑定两个 VIP，VIP 未漂到本机时也要能启动（master 必须，worker 无害）。
-- `rp_filter=2`（宽松）：双网卡不对称路由防丢包。
+- `rp_filter=2`（宽松）：双网卡不对称路由防丢包。生效值取 `max(all, 各网卡)`，`all=2` 已保证全部网卡宽松（网卡残留 1 不会生效）；`default=2` 让之后创建的 tunl0/veth 等接口同样宽松。
+- `ipip`：Calico IPIP 封装必需；内核 6.8 通常可按需自动加载，显式预加载消除一个失败点（清理时对应 `modprobe -r ipip`，见附录 C）。
+- IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（fs.inotify、nf_conntrack_max 等）按既定决策保持默认。
 
 ### 5.3 nftables 模块与命令行（不启用服务）
 
