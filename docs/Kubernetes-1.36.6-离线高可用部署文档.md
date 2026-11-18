@@ -19,7 +19,6 @@
 | envoy（数据面） | distroless-v1.37.1 | 由 EnvoyProxy 资源指定 |
 | Helm | 3.22.1 | 仅 master 安装；OCI 拉取需 ≥3.8 |
 
-本文不含（见附录 A）：Lustre 客户端、Kyverno（已取消）、mergerfs、NFS CSI/StorageClass、metrics-server、kube-prometheus、Volcano、GPU Operator、HTTPS/TLS、审计日志、etcd 加密、集中日志。
 
 ### 1.2 架构拓扑
 
@@ -48,34 +47,17 @@
                 worker11…worker1N（约 48 台）
 ```
 
-要点：
+要点（其余细节见各章）：
 
-- **内外两个 API VIP 独立漂移**（不使用 vrrp_sync_group）：外网网络通常更不稳定，同步组会让外网 VRRP 抖动连累内网 VIP。两个 VIP 允许落在不同 master，正常时都在 master01。
-- 集群内部通信（API/etcd/kubelet/Pod 底层/存储）一律走内网网卡；默认路由、业务入口、外部运维 API 走外网网卡。
-- master 保留默认 `node-role.kubernetes.io/control-plane:NoSchedule` 污点，不额外加调度标签。
-- NodePort 只在内网网段监听（`nodePortAddresses`），外网网卡 30000-32767 应被拒绝。
-- 集群级不配镜像仓库登录：系统镜像项目公开；业务私有镜像由业务侧 `imagePullSecrets` / 节点预拉取。
+- **内外两个 API VIP 独立漂移**（不使用 vrrp_sync_group）：外网网络更不稳定，同步组会让外网 VRRP 抖动连累内网 VIP；两个 VIP 允许落在不同 master，正常时都在 master01。
+- 集群内部通信（API/etcd/kubelet/Pod 底层/存储）一律走内网网卡；默认路由、业务入口、外部运维 API 走外网网卡。各组件逐项配置见 2.5 索引表。
 
-### 1.3 已确认的总体设计
+### 1.3 设计原则
 
-| 类别 | 已确认方案 |
-|---|---|
-| 集群架构 | kubeadm；3 master + N worker（当前约 51 台）；stacked etcd |
-| 容器运行时 | containerd 2.3.0 官方二进制（`/usr/local/bin`）；systemd cgroup 驱动 |
-| API 高可用 | keepalived + haproxy 于 3 台 master；内外 VIP 各自独立 VRRP 实例（优先级 100/90/80） |
-| API 入口 | 内网 VIP 供集群节点；外网 VIP 仅授权运维网段（HAProxy ACL + 网络侧双重限制）；后端均转发 3 台 master 内网 6443；前端端口 16443 |
-| kube-proxy | nftables 模式；`nodePortAddresses` = 内网 CIDR |
-| Calico | v3.32.0 官方 Helm（CRD Chart + Operator Chart）；apiServer 启用、goldmane/whisker 关闭；BGP full-mesh（不部署 RR）；IPIP Always；blockSize 25；natOutgoing true；节点探测限定内网网卡；镜像 `${REGISTRY}` + `imagePath: calico` |
-| Pod/Service CIDR | POD_CIDR（默认 10.244.0.0/14）/ SERVICE_CIDR（10.96.0.0/12），CoreDNS ClusterIP 保持默认分配 |
-| 资源预留 | 所有节点 kubeReserved 4C/4Gi、systemReserved 2C/2Gi；`enforceNodeAllocatable: [pods]` |
-| maxPods | 110 |
-| 节点日志 | 容器日志 50Mi×5；journald SystemMaxUse=2G |
-| 证书 | 叶子证书 10 年、CA 20 年（kubeadm v1beta4 原生字段，1.31+ 支持；以 `certs check-expiration` 实测为准） |
-| MetalLB | v0.15.3 Helm；L2 模式；仅外网池，`autoAssign: false`，通告限定外网网卡；关闭 FRR |
-| Envoy Gateway | v1.7.1 Helm；只 HTTP 80；`externalTrafficPolicy: Cluster`；副本 2；固定 GW_EXT_IP；允许所有命名空间接入 |
-| 存储 | 沿用各套存储现有部署配置，本文不重复定义 |
-| etcd 备份 | 本文不实施，上线前由运维侧交付（附录 A 责任表） |
-| 系统调优 | fs.inotify.*、nf_conntrack_max 等暂不调整，保持默认 |
+- 换集群只改 `/etc/k8s-deploy.env` 一个文件（2.2），本文不写死任何 IP/域名/密码。
+- 有官方 Helm Chart 的组件一律 chart 安装（Calico / MetalLB / Envoy Gateway），manifest 仅作离线兜底。
+- 离线分发三渠道：deb → 内网 apt 镜像站；二进制/chart/证书 → `${FILE_URL}`；镜像 → Harbor 公开项目。
+- 讨论过程与决策理由记录在仓库 `docs/DECISIONS.md`，本文只写结论与操作步骤。
 
 ### 1.4 执行总览
 
@@ -508,7 +490,9 @@ systemctl restart systemd-journald && journalctl --disk-usage
 
 ## 6. 高可用入口：keepalived + HAProxy（仅 master）
 
-3 台 master 均部署。两个 VRRP 实例**独立漂移**；HAProxy 两个 frontend 分别绑两个 VIP:16443，后端同为 3 台 master 内网:6443。执行前变量必须齐备：
+3 台 master 均部署。两个 VRRP 实例**独立漂移**；HAProxy 两个 frontend 分别绑两个 VIP:16443，后端同为 3 台 master 内网:6443。
+
+先通过 2.5 的通用检查，再确认本章专属变量——任何一项为空或告警，先改 env 再继续：
 
 ```bash
 source /etc/k8s-deploy.env
@@ -517,10 +501,7 @@ echo "${KA_STATE} ${KA_PRIORITY} ${KA_VRID} ${KA_EXT_VRID}"
 echo "${MASTER01_IP} ${MASTER02_IP} ${MASTER03_IP}"
 [ "${STATS_AUTH}" != "admin:ChangeMe" ] || echo "STATS_AUTH 是默认值，必须改强密码"
 [ "${#KA_AUTH_PASS}" -ge 1 ] && [ "${#KA_AUTH_PASS}" -le 8 ] || echo "KA_AUTH_PASS 为空或超 8 位"
-stat -c '%a %n' /etc/k8s-deploy.env    # 600
 ```
-
-任何告警出现都先改 env 再继续。
 
 ### 6.1 安装与 HAProxy 配置
 
@@ -819,9 +800,10 @@ crictl pull ${REGISTRY}/pause:3.10.2    # 验证 7.2 Harbor 访问已生效
 
 ### 8.4 kubeadm 配置（v1beta4）
 
-kubeadm YAML 不读环境变量：模板 `kubeadm-config.yaml.tpl` + `envsubst` 生成（模板见 `files/kubeadm/kubeadm-config.yaml.tpl`）。关键项：
+kubeadm YAML 不读环境变量：先写模板 `kubeadm-config.yaml.tpl`（内容即下文，本文为唯一权威版本），再 `envsubst` 生成：
 
-```yaml
+```bash
+cat > kubeadm-config.yaml.tpl << 'EOF'
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
 localAPIEndpoint:
@@ -883,6 +865,7 @@ evictionMinimumReclaim:
   imagefs.available: 500Mi
 containerLogMaxSize: 50Mi
 containerLogMaxFiles: 5
+EOF
 ```
 
 要点：
