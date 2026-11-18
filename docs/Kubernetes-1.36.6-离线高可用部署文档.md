@@ -401,8 +401,8 @@ sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables \
 # 期望依次为 1 1 1 1 2 2，任何一项不符先解决再继续
 ```
 
-- `ip_nonlocal_bind=1`：HAProxy 显式绑定两个 VIP，VIP 未漂到本机时也要能启动（master 必须，worker 无害）。
-- `rp_filter=2`（宽松）：双网卡不对称路由防丢包。生效值取 `max(all, 各网卡)`，`all=2` 已保证全部网卡宽松（网卡残留 1 不会生效）；`default=2` 让之后创建的 tunl0/veth 等接口同样宽松。
+- `ip_nonlocal_bind=1`：**必配**（内核/Ubuntu 默认 0）。HAProxy 显式绑定两个 VIP，VIP 未漂到本机时也要能启动，否则 bind 报 `EADDRNOTAVAIL`（master 必须，worker 无害）。
+- `rp_filter=2`（宽松）：双网卡不对称路由防丢包；严格模式（1）下 Calico IPIP 报文会被直接丢弃（Felix 检测到 strict RPF 也会拒绝工作）。生效值取 `max(all, 各网卡)`，`all=2` 已保证全部网卡宽松（网卡残留 1 不会生效）；`default=2` 让之后创建的 tunl0/veth 等接口同样宽松。注意：Ubuntu 24.04 默认已是 2（`/usr/lib/sysctl.d/10-network-security.conf`），此处显式写入是为了防安全加固基线（如 CIS 会改回 1）与镜像漂移，**不要因为"与默认重复"而删除**。
 - `ipip`：Calico IPIP 封装必需；内核 6.8 通常可按需自动加载，显式预加载消除一个失败点（清理时对应 `modprobe -r ipip`，见附录 C）。
 - IPv6 未启用，故无 `net.ipv6.conf.all.forwarding` 等项；其余内核调优（fs.inotify、nf_conntrack_max 等）按既定决策保持默认。
 
