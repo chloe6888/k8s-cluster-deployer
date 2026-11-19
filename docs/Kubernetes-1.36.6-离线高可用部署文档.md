@@ -169,23 +169,23 @@ PY
 
 ### 1.6 离线介质准备（在可上网的资源准备机执行）
 
-**文件清单与上传**：统一上传到 `${FILE_URL}`，部署前逐个确认可下载（HTTP 200）。资源准备可用工程仓库 CI（`download-artifacts.yml`）自动完成，`scripts/package-offline.sh` 展开为下表文件名（`SHA256SUMS` 路径同步展平为文件名）：
+文件与镜像统一在资源准备机准备：文件上传 `${FILE_URL}`，镜像推 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取。文件由工程仓库 CI（`download-artifacts.yml`）自动下载，`scripts/package-offline.sh` 展平为下表文件名（`SHA256SUMS` 路径同步展平）：
 
-| 文件 | 用于章节 | 来源 |
-|---|---|---|
-| `containerd-2.3.0-linux-amd64.tar.gz` | 4.1 | GitHub containerd v2.3.0 release |
-| `containerd.service` | 4.1 | containerd v2.3.0 源码仓库 |
-| `runc.amd64`、`runc.sha256sum` | 4.3 | GitHub runc v1.4.2 release（runc 另对照上游 sha256sum） |
-| `nerdctl-2.3.0-linux-amd64.tar.gz` | 4.4 | GitHub nerdctl v2.3.0 release |
-| `helm-v3.22.1-linux-amd64.tar.gz` | 5.7 | get.helm.sh |
-| `Release.key` | 5.1 | `pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key`；**上传时记录 sha256 与 GPG 指纹** |
-| `harbor-ca.crt` | 4.2 | 本集群 Harbor 私有 CA 证书（集群专属，不入工程仓库） |
-| `SHA256SUMS` | 1.6 | 工程仓库 `artifacts/checksums/SHA256SUMS`（CI 生成，覆盖上表仓库内全部文件） |
-| `tigera-operator-v3.32.0.tgz` | 6 | Calico 官方 Operator Chart |
-| `crd.projectcalico.org.v1-v3.32.0.tgz` | 6 | Calico 官方 **CRD Chart（必备，勿漏）** |
-| `metallb-0.15.3.tgz` | 7 | MetalLB 官方 Chart |
-| `gateway-helm-v1.7.1.tgz` | 8 | `oci://docker.io/envoyproxy/gateway-helm` |
-| `calico-3.32.0.yaml`、`metallb-native-v0.15.3.yaml`、`envoy-gateway-install-v1.7.1.yaml` | 6/7/8 | 上游 manifest（仅 chart 安装失败时手工 apply 兜底，镜像需已在 Harbor） |
+| 文件 | 用于章节 |
+|---|---|
+| `containerd-2.3.0-linux-amd64.tar.gz`、`containerd.service` | 4.1 |
+| `runc.amd64`、`runc.sha256sum` | 4.3 |
+| `nerdctl-2.3.0-linux-amd64.tar.gz` | 4.4 |
+| `helm-v3.22.1-linux-amd64.tar.gz` | 5.7 |
+| `Release.key`（上传时记录 sha256 与 GPG 指纹） | 5.1 |
+| `harbor-ca.crt`（集群专属，不入工程仓库） | 4.2 |
+| `SHA256SUMS`（CI 生成，覆盖仓库内全部文件） | 1.6 |
+| `tigera-operator-v3.32.0.tgz`、`crd.projectcalico.org.v1-v3.32.0.tgz`（CRD Chart 必备，勿漏） | 6 |
+| `metallb-0.15.3.tgz` | 7 |
+| `gateway-helm-v1.7.1.tgz` | 8 |
+| `calico-3.32.0.yaml`、`metallb-native-v0.15.3.yaml`、`envoy-gateway-install-v1.7.1.yaml`（chart 失败时手工 apply 兜底） | 6/7/8 |
+
+部署前逐个确认可下载（HTTP 200）：
 
 ```bash
 for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.sha256sum \
@@ -198,14 +198,14 @@ for f in containerd-2.3.0-linux-amd64.tar.gz containerd.service runc.amd64 runc.
 done
 ```
 
-**镜像清单与推送 Harbor**：所有镜像推到 `${REGISTRY}`（公开项目），部署中任何一步禁止依赖公网拉取。清单已对照各 chart 实际 values 与上游源码核实（详见 DECISIONS.md）：
+**镜像清单与推送 Harbor**（安装时以 6.3 / 7.1 / 8.1 的 `helm template | grep image` 渲染结果为准逐一核对）：
 
 | 类别 | 镜像（全部推 `${REGISTRY}`） | 章节 |
 |---|---|---|
 | K8s 系统 | `kubeadm config images list --kubernetes-version v1.36.6 --image-repository ${REGISTRY}` 的全部输出（含 pause:3.10.2） | 5.3 |
-| Calico | `tigera/operator:v1.42.0`；`calico/` 下 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`（均 `:v3.32.0`）。CSI 默认关闭、goldmane/whisker 已禁用，相关镜像不需推送 | 6.3 |
+| Calico | `tigera/operator:v1.42.0`；`calico/` 下 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`（均 `:v3.32.0`） | 6.3 |
 | MetalLB | `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`、`frrouting/frr:10.4.1`（speaker 内置 FRR sidecar） | 7 |
-| Envoy Gateway | `envoyproxy/gateway:v1.7.1`（控制面 + certgen Job 共用）、`envoyproxy/envoy:distroless-v1.37.1`（数据面，8.3 指定）。限流未启用，ratelimit 不推 | 8 |
+| Envoy Gateway | `envoyproxy/gateway:v1.7.1`（控制面 + certgen Job 共用）、`envoyproxy/envoy:distroless-v1.37.1`（数据面，8.3 指定） | 8 |
 | 验收用 | busybox（版本自定） | 9 |
 
 推送方式（资源准备机，需能访问公网源与 Harbor）：
