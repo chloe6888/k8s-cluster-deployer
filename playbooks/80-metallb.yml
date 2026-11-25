@@ -1,0 +1,10 @@
+---
+# 阶段 80：MetalLB 0.15.3 L2（手册第 7 章；只跑 master01）。
+- name: 80 MetalLB
+  hosts: first_master
+  gather_facts: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - metallb
+  tags: [lb]

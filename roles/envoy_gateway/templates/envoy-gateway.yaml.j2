@@ -1,0 +1,29 @@
+# 手册 8.4② + 修订 9：80 常开；443（TLS 终止）在 gw_tls_enabled 时添加。
+# allowedRoutes from: All 为附录 A.2 已登记的风险接受项；多团队共用时改 Selector。
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw-ext
+  namespace: envoy-gateway-system
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+{% if gw_tls_enabled | bool %}
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: {{ gw_tls_secret }}
+    allowedRoutes:
+      namespaces:
+        from: All
+{% endif %}

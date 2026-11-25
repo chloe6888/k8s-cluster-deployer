@@ -1,0 +1,19 @@
+---
+# 阶段 99：重置集群（独立执行，不入 site.yml；worker 先于 master）。
+# 双确认门禁：ansible-playbook playbooks/99-reset.yml -e confirm_reset=yes
+- name: 99 ① 重置 worker
+  hosts: workers
+  gather_facts: false
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - reset
+
+- name: 99 ② 重置 master（逐台）
+  hosts: masters
+  gather_facts: false
+  serial: 1
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - reset

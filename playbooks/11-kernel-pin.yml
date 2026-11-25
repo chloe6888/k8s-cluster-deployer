@@ -1,0 +1,14 @@
+---
+# 阶段 11：内核固定（手册 2.5，会重启节点；独立执行，不入 site.yml）。
+# 开启条件：group_vars 中 pin_kernel: true。
+#   ansible-playbook playbooks/11-kernel-pin.yml
+- name: 11 内核固定与重启
+  hosts: k8s_all
+  gather_facts: true
+  serial: 1
+  vars_files: ../config/versions.yml
+  roles:
+    - role: common
+    - role: kernel_pin
+      when: pin_kernel | bool
+  tags: [os]

@@ -1,13 +1,15 @@
 # 统一版本配置（与部署文档 1.1 节一致）。升级时先改这里，再同步 scripts/ 和 artifacts/。
 kubernetes_version: "1.36.6"
+kubernetes_deb_revision: "1.1"        # deb 包版本后缀：kubelet=1.36.6-1.1
 pause_version: "3.10.2"
 containerd_version: "2.3.0"
 runc_version: "1.4.2"
 nerdctl_version: "2.3.0"
-mergerfs_version: "2.40.2"
-calico_version: "3.32.0"
+helm_version: "3.22.1"
+kernel_version: "6.8.0-149-generic"  # 阶段 11 内核固定目标
+calico_version: "3.32.2"             # 3.32.0 存在 nft 兼容问题，已调整（DECISIONS #10）
+tigera_operator_image_tag: "v1.42.6"
+metallb_version: "0.15.3"
+metallb_frr_image_tag: "10.4.1"      # speaker FRR sidecar，tag 随 chart 默认
 envoy_gateway_version: "1.7.1"
 envoy_proxy_image_tag: "distroless-v1.37.1"
-envoy_ratelimit_image_tag: "c8765e89"
-metallb_version: "0.15.3"
-kyverno_version: "1.18.0"

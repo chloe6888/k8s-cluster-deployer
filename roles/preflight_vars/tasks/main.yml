@@ -1,0 +1,54 @@
+---
+# 阶段 00 第一段：控制机侧变量预检（只读）。在 localhost 上执行。
+- name: 组装 masters / nodes 数据（从 inventory hostvars 提取）
+  ansible.builtin.set_fact:
+    preflight_payload:
+      cluster_prefix: "{{ cluster_prefix }}"
+      harbor: "{{ harbor }}"
+      mirror: "{{ mirror }}"
+      apt_k8s_url: "{{ apt_k8s_url }}"
+      node_iface: "{{ node_iface }}"
+      ext_iface: "{{ ext_iface }}"
+      node_cidr: "{{ node_cidr }}"
+      pod_cidr: "{{ pod_cidr }}"
+      service_cidr: "{{ service_cidr }}"
+      vip: "{{ vip }}"
+      vip_prefix: "{{ vip_prefix | default(24) }}"
+      ext_vip: "{{ ext_vip }}"
+      ext_vip_prefix: "{{ ext_vip_prefix | default(24) }}"
+      vip_port: "{{ vip_port }}"
+      ext_api_allowed_cidr: "{{ ext_api_allowed_cidr }}"
+      ka_auth_pass: "{{ ka_auth_pass | default(None) }}"
+      stats_user: "{{ stats_user | default('') }}"
+      stats_pass: "{{ stats_pass | default('') }}"
+      metallb_ext_range: "{{ metallb_ext_range }}"
+      gw_ext_ip: "{{ gw_ext_ip }}"
+      extra_nets: "{{ extra_nets | default([]) }}"
+      masters: >-
+        {%- set out = [] -%}
+        {%- for h in groups['masters'] -%}
+        {%- set _ = out.append({'name': h,
+                                'node_ip': hostvars[h]['node_ip'] | default(''),
+                                'node_ext_ip': hostvars[h]['node_ext_ip'] | default(''),
+                                'ka_state': hostvars[h]['ka_state'] | default(''),
+                                'ka_priority': hostvars[h]['ka_priority'] | default(-1)}) -%}
+        {%- endfor -%}
+        {{ out }}
+      nodes: >-
+        {%- set out = [] -%}
+        {%- for h in groups['k8s_all'] -%}
+        {%- set _ = out.append({'name': h,
+                                'node_name': cluster_prefix ~ '-' ~ h,
+                                'node_ip': hostvars[h]['node_ip'] | default(''),
+                                'node_ext_ip': hostvars[h]['node_ext_ip'] | default('')}) -%}
+        {%- endfor -%}
+        {{ out }}
+
+- name: 变量取值预检（Python 标准库脚本，任何一项失败即中止）
+  ansible.builtin.script: check_vars.py
+  args:
+    executable: /usr/bin/env python3
+  environment:
+    K8S_VARS: "{{ preflight_payload | to_json }}"
+  register: preflight_vars_out
+  changed_when: false

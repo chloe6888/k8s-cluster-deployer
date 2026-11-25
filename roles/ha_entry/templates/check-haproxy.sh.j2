@@ -1,0 +1,17 @@
+#!/bin/bash
+# {{ ansible_managed }} —— 手册 3.3；端口已展开为数字（修订点 9：模板渲染，shell 变量原样保留）
+# 只返回 0/1：失败时 keepalived 按 weight 降低本机优先级，恢复后自动回升
+PORT="{{ vip_port }}"
+RETRY=3
+
+for ((i=1; i<=RETRY; i++)); do
+    if pgrep -x haproxy >/dev/null \
+       && ss -lntH "sport = :${PORT}" | grep -q . \
+       && echo "show info" | socat -t 2 stdio /run/haproxy/admin.sock 2>/dev/null | grep -q '^Name: HAProxy'; then
+        exit 0
+    fi
+    (( i < RETRY )) && sleep 1
+done
+
+logger -t check-haproxy "haproxy 异常，返回失败以降低 VIP 优先级"
+exit 1

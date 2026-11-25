@@ -1,0 +1,11 @@
+---
+# 阶段 81：Envoy Gateway 1.7.1（手册第 8 章 + 修订 9；只跑 master01）。
+# 443/TLS 需 vault 提供 gw_tls_cert / gw_tls_key（gw_tls_enabled 自动派生）。
+- name: 81 Envoy Gateway
+  hosts: first_master
+  gather_facts: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - envoy_gateway
+  tags: [gateway]

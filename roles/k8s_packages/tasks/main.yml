@@ -1,0 +1,165 @@
+---
+# 阶段 40：kubelet / kubeadm / kubectl / crictl（手册 5.1、5.2）。全部节点并行。
+- name: 安装 gnupg（Release.key 指纹核对需要）
+  ansible.builtin.apt:
+    name: gnupg
+    state: present
+    update_cache: false
+  tags: [kubeadm]
+
+- name: "5.1 获取 Release.key（获取即校验 SHA256SUMS）"
+  ansible.builtin.include_role:
+    name: artifact
+  vars:
+    artifact_file: Release.key
+  tags: [kubeadm]
+
+- name: "5.1 核对 Release.key 的 sha256（与上传登记值比对；未登记则提示后继续）"
+  ansible.builtin.command:
+    cmd: "sha256sum {{ package_dir }}/Release.key"
+  register: pkg_key_sha
+  changed_when: false
+  failed_when: k8s_release_key_sha256 | default('') != '' and pkg_key_sha.stdout.split()[0] != k8s_release_key_sha256
+  tags: [kubeadm]
+
+- name: 提示：未登记 Release.key 校验值
+  ansible.builtin.debug:
+    msg: >-
+      警告：k8s_release_key_sha256 / k8s_release_key_fingerprint 未填写，跳过指纹核对。
+      公钥可信度只依赖内网镜像站，请在 group_vars 登记后重跑阶段 40。
+  when: (k8s_release_key_sha256 | default('')) == '' or (k8s_release_key_fingerprint | default('')) == ''
+  tags: [kubeadm]
+
+- name: "5.1 核对 GPG 指纹（不一致立即停止——信任链只靠内网镜像站）"
+  ansible.builtin.command:
+    cmd: "gpg --show-keys --fingerprint {{ package_dir }}/Release.key"
+  register: pkg_key_fp
+  changed_when: false
+  failed_when: >-
+    k8s_release_key_fingerprint | default('') != ''
+    and (pkg_key_fp.stdout | replace(' ', '') is not search(k8s_release_key_fingerprint | replace(' ', '')))
+  tags: [kubeadm]
+
+- name: "5.1 转成 apt keyring"
+  ansible.builtin.command:
+    cmd: "gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg {{ package_dir }}/Release.key"
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  tags: [kubeadm]
+
+- name: "5.1 keyring 权限 0644"
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    mode: "0644"
+
+- name: "5.1 写入 apt 源"
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: "0644"
+    content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ apt_k8s_url }} /\n"
+  tags: [kubeadm]
+
+- name: "5.1 apt update"
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 600
+  tags: [kubeadm]
+
+- name: "5.1 确认 kubeadm 候选版本正确且来源为内网镜像站：{{ kubernetes_version }}"
+  ansible.builtin.command:
+    cmd: apt-cache policy kubeadm
+  register: pkg_kubeadm_policy
+  changed_when: false
+  failed_when: >-
+    pkg_kubeadm_policy.stdout is not search('Candidate: ' ~ kubernetes_version)
+    or pkg_kubeadm_policy.stdout is not search((apt_k8s_url | urlsplit('hostname')) | regex_escape)
+  tags: [kubeadm]
+
+- name: "5.1 安装 kubelet / kubeadm / kubectl 固定版本"
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+      - "kubeadm={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+      - "kubectl={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+    state: present
+    update_cache: false
+  tags: [kubeadm]
+
+- name: "5.1 hold 三件套"
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [kubelet, kubeadm, kubectl]
+  tags: [kubeadm]
+
+- name: "5.1 kubelet 只设开机启动，不启动（init/join 时再拉起）"
+  ansible.builtin.systemd:
+    name: kubelet
+    enabled: true
+  tags: [kubeadm]
+
+- name: "5.1 双网卡固定节点 IP（init/join 之前必须完成）"
+  ansible.builtin.copy:
+    dest: /etc/default/kubelet
+    mode: "0644"
+    content: "KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}\n"
+  tags: [kubeadm]
+
+- name: "5.2 crictl：缺才装 cri-tools"
+  ansible.builtin.command:
+    cmd: crictl --version
+  register: pkg_crictl_ver
+  failed_when: false
+  changed_when: false
+  tags: [kubeadm]
+
+- name: "5.2 安装 cri-tools"
+  ansible.builtin.apt:
+    name: cri-tools
+    state: present
+    update_cache: false
+  when: pkg_crictl_ver.rc != 0
+  tags: [kubeadm]
+
+- name: "5.2 hold cri-tools"
+  ansible.builtin.dpkg_selections:
+    name: cri-tools
+    selection: hold
+  tags: [kubeadm]
+
+- name: "5.2 写入 /etc/crictl.yaml"
+  ansible.builtin.copy:
+    dest: /etc/crictl.yaml
+    mode: "0644"
+    content: |
+      runtime-endpoint: unix:///run/containerd/containerd.sock
+      image-endpoint: unix:///run/containerd/containerd.sock
+      timeout: 10
+      debug: false
+  tags: [kubeadm]
+
+# ---- 验证 ----
+- name: 验证 kubeadm 版本
+  ansible.builtin.command:
+    cmd: kubeadm version -o short
+  register: pkg_kubeadm_ver
+  changed_when: false
+  failed_when: pkg_kubeadm_ver.stdout | trim != 'v' ~ kubernetes_version
+  tags: [kubeadm, verify]
+
+- name: 验证 hold 列表含四件
+  ansible.builtin.command:
+    cmd: apt-mark showhold
+  register: pkg_holds
+  changed_when: false
+  failed_when: >-
+    ['kubelet', 'kubeadm', 'kubectl', 'cri-tools'] | difference(pkg_holds.stdout_lines) | length > 0
+  tags: [kubeadm, verify]
+
+- name: 验证 crictl info（与 nerdctl -n k8s.io 同一命名空间）
+  ansible.builtin.command:
+    cmd: crictl info
+  register: pkg_crictl_info
+  changed_when: false
+  failed_when: pkg_crictl_info.rc != 0
+  tags: [kubeadm, verify]

@@ -1,0 +1,24 @@
+---
+# 修订 4：对每个需要私有 CA 的 registry 主机建 certs.d 目录、放 CA、写 hosts.toml。
+# 生产不使用 skip_verify；Harbor 为 HTTP 时须自行调整（手册 4.2 说明）。
+- name: 选择该主机的 CA 文件
+  ansible.builtin.set_fact:
+    runtime_ca_source: "{{ runtime_harbor_ca_file if registry_host == harbor else runtime_app_registry_ca_file }}"
+
+- name: 建立 certs.d 目录
+  ansible.builtin.file:
+    path: "/etc/containerd/certs.d/{{ registry_host }}"
+    state: directory
+    mode: "0755"
+
+- name: 放入 CA（{{ runtime_ca_source }}）
+  ansible.builtin.copy:
+    src: "{{ runtime_ca_source }}"
+    dest: "/etc/containerd/certs.d/{{ registry_host }}/ca.crt"
+    mode: "0644"
+
+- name: 写入 hosts.toml
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: "/etc/containerd/certs.d/{{ registry_host }}/hosts.toml"
+    mode: "0644"

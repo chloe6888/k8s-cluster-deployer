@@ -1,0 +1,8 @@
+---
+# 离线入库：ansible-galaxy collection download -p collections -r requirements.yml
+# 部署机安装：ansible-galaxy collection install -r requirements.yml --offline
+#            或直接解开 collections/ 里的 tarball
+collections:
+  - name: ansible.posix
+  - name: community.general
+  - name: community.crypto

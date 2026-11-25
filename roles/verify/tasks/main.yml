@@ -1,0 +1,368 @@
+---
+# 阶段 90：部署后验收（手册 9.1/9.2）。逐项检查、失败汇总后一次性报告，不逐条中断。
+# 危险探测（VIP 漂移、连通性）单独打 never 标签，显式指定才执行。
+- name: 初始化失败汇总
+  ansible.builtin.set_fact:
+    verify_failures: []
+    verify_node: "{{ node_name }}"
+  tags: [verify]
+
+# ===================== 节点级检查（每台节点本机） =====================
+- name: "9.1 内核版本（pin_kernel=true 才检查）"
+  when: pin_kernel | bool
+  block:
+    - name: 读取 uname -r
+      ansible.builtin.command: uname -r
+      register: vf_uname
+      changed_when: false
+
+    - name: 记录内核不符
+      ansible.builtin.set_fact:
+        verify_failures: "{{ verify_failures + [verify_node ~ ' 内核 ' ~ (vf_uname.stdout | trim) ~ ' != ' ~ kernel_version] }}"
+      when: (vf_uname.stdout | trim) != kernel_version
+
+- name: "9.1 读取 hold 列表"
+  ansible.builtin.command: apt-mark showhold
+  register: vf_holds
+  changed_when: false
+
+- name: "9.1 记录 K8s 包未 hold"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [verify_node ~ ' 未 hold: ' ~ item] }}"
+  loop: "{{ ['kubelet', 'kubeadm', 'kubectl', 'cri-tools'] | difference(vf_holds.stdout_lines) }}"
+
+- name: "9.1 读取 inotify 参数"
+  ansible.builtin.command:
+    cmd: sysctl -n fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events
+  register: vf_inotify
+  changed_when: false
+
+- name: "9.1 记录 inotify 不符（期望 8192 / 1048576 / 65536）"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [verify_node ~ ' inotify: ' ~ (vf_inotify.stdout | trim | replace('\n', ' '))] }}"
+  when: vf_inotify.stdout | trim != '8192\n1048576\n65536'
+
+- name: "9.1 读取 journald SystemMaxUse"
+  ansible.builtin.command: grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf
+  register: vf_journald
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 journald 不符（期望 4G）"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [verify_node ~ ' journald SystemMaxUse 不符: ' ~ (vf_journald.stdout | default('缺失'))] }}"
+  when: vf_journald.rc != 0 or vf_journald.stdout is not search(journald_system_max_use)
+
+- name: "9.1 swap 应已关闭"
+  ansible.builtin.command: cat /proc/swaps
+  register: vf_swaps
+  changed_when: false
+
+- name: "9.1 记录 swap 仍存在"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + [verify_node ~ ' swap 未关闭'] }}"
+  when: (vf_swaps.stdout_lines | length) > 1
+
+- name: "9.1 master 证书年限（叶子约 10 年 / CA 约 20 年）"
+  when: inventory_hostname in groups['masters']
+  block:
+    - name: kubeadm certs check-expiration
+      ansible.builtin.command: kubeadm certs check-expiration
+      register: vf_certs
+      changed_when: false
+      failed_when: false
+
+    - name: 记录证书检查异常
+      ansible.builtin.set_fact:
+        verify_failures: "{{ verify_failures + [verify_node ~ ' 证书检查异常（rc=' ~ vf_certs.rc ~ '）'] }}"
+      when: vf_certs.rc != 0
+
+    - name: 输出证书年限明细
+      ansible.builtin.debug:
+        msg: "{{ vf_certs.stdout_lines | default([]) }}"
+
+# ===================== 集群级检查（全部委托 master01） =====================
+- name: "9.1 节点应全部 Ready"
+  ansible.builtin.command:
+    cmd: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_nodes
+  changed_when: false
+
+- name: "9.1 记录未 Ready 节点数"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['未 Ready 节点 ' ~ ((vf_nodes.stdout_lines | reject('equalto', 'True')) | list | length) ~ ' 台'] }}"
+  run_once: true
+  when: (vf_nodes.stdout_lines | reject('equalto', 'True')) | list | length > 0
+
+- name: "9.1 节点 INTERNAL-IP 应为内网 IP（非 VIP）"
+  ansible.builtin.command:
+    cmd: kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_node_ips
+  changed_when: false
+
+- name: "9.1 记录 INTERNAL-IP 异常"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['节点 INTERNAL-IP 含 ' ~ item ~ '（应为各节点内网 IP）'] }}"
+  loop: "{{ [vip, ext_vip] }}"
+  run_once: true
+  when: item in vf_node_ips.stdout_lines
+
+- name: "9.1 系统Pod 应全部 Running/Completed"
+  ansible.builtin.command:
+    cmd: kubectl get pods -A -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_pods
+  changed_when: false
+
+- name: "9.1 记录异常系统 Pod 数"
+  ansible.builtin.set_fact:
+    verify_failures: >-
+      {{ verify_failures + ['非 Running/Succeeded Pod '
+      ~ ((vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length) ~ ' 个'] }}
+  run_once: true
+  when: (vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length > 0
+
+- name: "9.1 离线纯净度：全部镜像应来自 {{ registry }}"
+  ansible.builtin.command:
+    cmd: kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_images
+  changed_when: false
+
+- name: "9.1 记录非内网镜像"
+  ansible.builtin.set_fact:
+    verify_failures: >-
+      {{ verify_failures + ['公网/未知镜像: '
+      ~ ((vf_images.stdout_lines | unique | reject('search', registry | regex_escape)) | list | join(', '))] }}
+  run_once: true
+  when: (vf_images.stdout_lines | unique | reject('search', registry | regex_escape)) | list | length > 0
+
+- name: "9.1 apiserver readyz"
+  ansible.builtin.command:
+    cmd: kubectl get --raw=/readyz?verbose
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_readyz
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 readyz 异常"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['readyz 未通过: ' ~ (vf_readyz.stdout | default('') | trim | splitlines() | last | default(''))] }}"
+  run_once: true
+  when: vf_readyz.rc != 0 or not (vf_readyz.stdout | default('') is search('readyz check passed'))
+
+- name: "9.1 kube-proxy：nftables 模式 + nodePortAddresses 内网网段"
+  ansible.builtin.shell: >-
+    kubectl -n kube-system get cm kube-proxy -o yaml
+    | grep -E 'mode:|nodePortAddresses' -A1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  args:
+    executable: /bin/bash
+  register: vf_kubeproxy
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 kube-proxy 配置异常"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['kube-proxy 配置异常（期望 nftables + ' ~ node_cidr ~ '）'] }}"
+  run_once: true
+  when: vf_kubeproxy.rc != 0 or vf_kubeproxy.stdout is not search('nftables') or vf_kubeproxy.stdout is not search(node_cidr | regex_escape)
+
+- name: "9.1 Calico TigerStatus 应 Available"
+  ansible.builtin.command: kubectl get tigerastatus -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_tiger
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 TigerStatus 异常"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['TigerStatus 未全部 Ready: ' ~ (vf_tiger.stdout | trim | default(''))] }}"
+  run_once: true
+  when: (vf_tiger.stdout | trim).split(' ') | reject('equalto', 'True') | list | length > 0
+
+- name: "9.1 Calico IPPool：IPIP / blockSize 25 / natOutgoing"
+  ansible.builtin.command:
+    cmd: kubectl get ippools.projectcalico.org default-ipv4-ippool -o jsonpath='{.spec.ipipMode} {.spec.blockSize} {.spec.natOutgoing}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: vf_ippool
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 IPPool 异常（期望 Always 25 true）"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['IPPool 异常: ' ~ (vf_ippool.stdout | trim | default('缺失'))] }}"
+  run_once: true
+  when: vf_ippool.rc != 0 or (vf_ippool.stdout | trim) != 'Always 25 true'
+
+- name: "9.1 Gateway PROGRAMMED 与 EXTERNAL-IP"
+  ansible.builtin.shell: >-
+    kubectl -n envoy-gateway-system get gateway gw-ext --no-headers;
+    kubectl -n envoy-gateway-system get svc --no-headers
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  args:
+    executable: /bin/bash
+  register: vf_gw
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 Gateway / 入口 IP 异常"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['Gateway 或入口 IP 异常（期望 Programmed+True / ' ~ gw_ext_ip ~ '）'] }}"
+  run_once: true
+  when: vf_gw.rc != 0 or vf_gw.stdout is not search('True') or vf_gw.stdout is not search(gw_ext_ip | regex_escape)
+
+- name: "9.1 etcd 集群健康"
+  ansible.builtin.shell: >-
+    crictl exec "$(crictl ps --name etcd -q | head -n1)"
+    etcdctl --endpoints=https://127.0.0.1:2379
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt
+    --cert=/etc/kubernetes/pki/etcd/server.crt
+    --key=/etc/kubernetes/pki/etcd/server.key
+    endpoint health --cluster
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  args:
+    executable: /bin/bash
+  register: vf_etcd
+  changed_when: false
+  failed_when: false
+
+- name: "9.1 记录 etcd 不健康成员"
+  ansible.builtin.set_fact:
+    verify_failures: "{{ verify_failures + ['etcd 不健康成员 ' ~ ((vf_etcd.stdout_lines | reject('search', 'is healthy')) | list | length) ~ ' 个'] }}"
+  run_once: true
+  when: vf_etcd.rc != 0 or (vf_etcd.stdout_lines | reject('search', 'is healthy')) | list | length > 0
+
+# ===================== 汇总 =====================
+- name: 验收汇总
+  ansible.builtin.debug:
+    msg: >-
+      {{ '%s 验收 %s' | format(verify_node, '通过 ✓' if (verify_failures | length) == 0 else '存在 ' ~ (verify_failures | length) ~ ' 项失败') }}
+  tags: [verify]
+
+- name: 节点级失败清单
+  ansible.builtin.debug:
+    msg: "{{ verify_failures }}"
+  when: verify_failures | length > 0
+
+- name: 任一失败即终止（避免半通验收混入交付）
+  ansible.builtin.assert:
+    that: verify_failures | length == 0
+    fail_msg: "验收未通过，见上方失败清单"
+  tags: [verify]
+
+# ===================== 手册 9.2 连通性（busybox_tag 非空才可用）=====================
+- name: "9.2 DNS 与跨节点互通测试（never 标签：显式 --tags connectivity 才执行）"
+  when: (busybox_tag | default('') | length > 0)
+  block:
+    - name: DNS 解析 kubernetes.default
+      ansible.builtin.command:
+        cmd: kubectl run dns-test --rm -i --restart=Never --image={{ registry }}/busybox:{{ busybox_tag }} -- nslookup kubernetes.default
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: vf_dns
+      changed_when: false
+      failed_when: vf_dns.rc != 0
+
+    - name: 起两个跨节点 Pod（前两台 worker；不足两台则 master01+master02）
+      ansible.builtin.command:
+        cmd: >-
+          kubectl run {{ item.name }} --image={{ registry }}/busybox:{{ busybox_tag }}
+          --overrides='{"spec":{"nodeName":"{{ item.node }}"}}' -- sleep 300
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      loop:
+        - { name: net-a, node: "{{ (groups['workers'] | default([]) + groups['masters'])[0] }}" }
+        - { name: net-b, node: "{{ (groups['workers'] | default([]) + groups['masters'])[1] }}" }
+      register: vf_net_pods
+      changed_when: false
+
+    - name: 取 net-b 的 Pod IP
+      ansible.builtin.command:
+        cmd: kubectl get pod net-b -o jsonpath='{.status.podIP}'
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: vf_netb_ip
+      changed_when: false
+      until: (vf_netb_ip.stdout | trim | length) > 0
+      retries: 15
+      delay: 4
+
+    - name: net-a ping net-b（跨节点 Pod 互通）
+      ansible.builtin.command:
+        cmd: kubectl exec net-a -- ping -c 3 {{ vf_netb_ip.stdout | trim }}
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: vf_ping
+      changed_when: false
+      failed_when: vf_ping.rc != 0
+
+  always:
+    - name: 清理测试 Pod
+      ansible.builtin.command:
+        cmd: kubectl delete pod net-a net-b --ignore-not-found --wait=false
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      changed_when: false
+  tags: [never, connectivity]
+
+# ===================== VIP 漂移演练（never 标签）=====================
+- name: "9.1 VIP 漂移演练：停持有者 haproxy，两 VIP 应迁移（--tags failover 才执行）"
+  block:
+    - name: 找到 VIP 当前持有者
+      ansible.builtin.shell: "ip -4 addr show | grep -w '{{ vip }}' >/dev/null && echo holder || echo ''"
+      args:
+        executable: /bin/bash
+      register: vf_vip_holder
+      changed_when: false
+      failed_when: vf_vip_holder.stdout_lines | select('equalto', 'holder') | list | length > 1
+
+    - name: 在持有者上停 haproxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: stopped
+      when: (vf_vip_holder.stdout | trim) == 'holder'
+
+    - name: 等待本机释放 VIP（weight -30 自动降级迁移）
+      ansible.builtin.shell: "ip -4 addr show | grep -w '{{ vip }}' || true"
+      args:
+        executable: /bin/bash
+      register: vf_vip_after
+      when: (vf_vip_holder.stdout | trim) == 'holder'
+      changed_when: false
+      until: vf_vip_after.stdout | trim | length == 0
+      retries: 20
+      delay: 3
+
+    - name: VIP 已被其他 master 接管（经 VIP 访问 apiserver 端口应连通）
+      ansible.builtin.shell: >-
+        timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo takeover-ok
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: vf_failover_check
+      changed_when: false
+      until: vf_failover_check.stdout | trim == 'takeover-ok'
+      retries: 20
+      delay: 3
+
+  always:
+    - name: 重新拉起本机 haproxy（恢复现场）
+      ansible.builtin.systemd:
+        name: haproxy
+        state: started
+      when: (vf_vip_holder.stdout | trim) == 'holder'
+  tags: [never, failover]

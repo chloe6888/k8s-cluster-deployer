@@ -1,0 +1,33 @@
+# 手册 8.3 —— EnvoyProxy（数据面镜像 + MetalLB 池绑定）与 GatewayClass。
+# GW_EXT_IP 必须属于 METALLB_EXT_RANGE；保持 externalTrafficPolicy: Cluster（不做源 IP 保留）。
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: proxy-ext
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+        container:
+          image: {{ registry }}/envoyproxy/envoy:{{ envoy_proxy_image_tag }}
+      envoyService:
+        type: LoadBalancer
+        externalTrafficPolicy: Cluster
+        annotations:
+          metallb.io/address-pool: pool-ext
+          metallb.io/loadBalancerIPs: {{ gw_ext_ip }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: proxy-ext
+    namespace: envoy-gateway-system

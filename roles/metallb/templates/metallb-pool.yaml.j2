@@ -1,0 +1,21 @@
+# 手册 7.3 —— autoAssign:false：只有显式指定 pool-ext 的 Service 才用池内地址，防误占入口 IP。
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: pool-ext
+  namespace: metallb-system
+spec:
+  addresses:
+    - {{ metallb_ext_range }}
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: l2-ext
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - pool-ext
+  interfaces:
+    - {{ ext_iface }}

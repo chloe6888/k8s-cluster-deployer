@@ -1,0 +1,29 @@
+---
+# 全流程（阶段 00→90）。阶段 11（内核固定，需重启）与 99（重置）独立执行，不在其列：
+#   ansible-playbook playbooks/site.yml                          # 全流程
+#   ansible-playbook playbooks/site.yml --tags cni               # 只跑某阶段
+# 逐阶段：见 README「执行顺序」表。
+- name: "00 预检"
+  import_playbook: 00-preflight.yml
+- name: "10 操作系统基线"
+  import_playbook: 10-os-baseline.yml
+- name: "20 高可用入口"
+  import_playbook: 20-ha-entry.yml
+- name: "30 容器运行时"
+  import_playbook: 30-container-runtime.yml
+- name: "40 K8s 软件包"
+  import_playbook: 40-k8s-packages.yml
+- name: "50 初始化 master01"
+  import_playbook: 50-init-master.yml
+- name: "51 加入其余 master"
+  import_playbook: 51-join-masters.yml
+- name: "60 Calico"
+  import_playbook: 60-calico.yml
+- name: "70 分批加入 worker"
+  import_playbook: 70-join-workers.yml
+- name: "80 MetalLB"
+  import_playbook: 80-metallb.yml
+- name: "81 Envoy Gateway"
+  import_playbook: 81-envoy-gateway.yml
+- name: "90 部署后验收"
+  import_playbook: 90-verify.yml

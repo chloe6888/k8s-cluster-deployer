@@ -1,0 +1,32 @@
+---
+# 阶段 20 中段：keepalived 按 master01→02→03 逐台启动（playbook serial:1 控制）。
+- name: "3.5 启动并启用 keepalived"
+  ansible.builtin.systemd:
+    name: keepalived
+    state: started
+    enabled: true
+  tags: [ha, keepalived]
+
+- name: "3.5 master01：等待两个 VIP 都出现在本机（下一步才启动下一台）"
+  when: inventory_hostname == groups['masters'][0]
+  ansible.builtin.command:
+    cmd: ip -4 addr show
+  register: ka_vip_wait
+  changed_when: false
+  until:
+    - ka_vip_wait.stdout is search(vip ~ '/')
+    - ka_vip_wait.stdout is search(ext_vip ~ '/')
+  retries: 20
+  delay: 3
+  tags: [ha, keepalived]
+
+- name: "3.5 master02/03：确认本机 keepalived 已运行（VIP 应仍在 master01）"
+  when: inventory_hostname != groups['masters'][0]
+  ansible.builtin.command:
+    cmd: systemctl is-active keepalived
+  register: ka_active_wait
+  changed_when: false
+  until: ka_active_wait.stdout | trim == 'active'
+  retries: 10
+  delay: 3
+  tags: [ha, keepalived]

@@ -1,0 +1,15 @@
+---
+- name: daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: 重启 haproxy
+  ansible.builtin.systemd:
+    name: haproxy
+    state: restarted
+
+- name: 重启 keepalived（仅已启动时）
+  ansible.builtin.systemd:
+    name: keepalived
+    state: restarted
+  when: "'keepalived.service' in ansible_facts.services and ansible_facts.services['keepalived.service']['state'] == 'running'"

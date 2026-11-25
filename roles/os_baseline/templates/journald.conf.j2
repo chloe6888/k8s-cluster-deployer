@@ -1,0 +1,7 @@
+# {{ ansible_managed }} —— 手册 2.8 journald 容量限制
+[Journal]
+Storage=persistent
+SystemMaxUse={{ journald_system_max_use }}
+SystemKeepFree=2G
+SystemMaxFileSize=256M
+MaxRetentionSec=1month

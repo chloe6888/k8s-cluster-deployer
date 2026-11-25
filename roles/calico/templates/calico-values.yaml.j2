@@ -1,0 +1,27 @@
+# 手册 6.4 calico-values.yaml —— 由 Ansible 渲染，勿手改。
+# 不设 imagePath：各组件默认路径即 calico/，设置后反而改变拼装结果（手册 6.4 说明）。
+manageCRDs: false                     # CRD 已由 6.3 的 CRD Chart server-side apply 提供
+installation:
+  enabled: true
+  registry: {{ registry }}/           # Installation CRD 要求结尾斜杠
+  calicoNetwork:
+    bgp: Enabled
+    nodeAddressAutodetectionV4:
+      cidrs:
+      - {{ node_cidr }}               # 只匹配内网网卡（网卡名正则在网卡不齐时易选错）
+    ipPools:
+      - cidr: {{ pod_cidr }}
+        encapsulation: IPIP           # Always
+        natOutgoing: Enabled
+        blockSize: 25
+        nodeSelector: all()
+apiServer:
+  enabled: true
+goldmane:
+  enabled: false                      # Chart 默认启用，离线拉取会失败，必须显式关闭
+whisker:
+  enabled: false
+tigeraOperator:
+  image: tigera/operator
+  version: {{ tigera_operator_image_tag }}   # v1.42.6（Chart v3.32.2 默认即此值）
+  registry: {{ registry }}

@@ -1,0 +1,10 @@
+---
+# 阶段 50：master01 初始化（手册 5.3/5.4；只跑 first_master）。
+- name: 50 初始化 master01
+  hosts: first_master
+  gather_facts: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - init_master
+  tags: [kubeadm]

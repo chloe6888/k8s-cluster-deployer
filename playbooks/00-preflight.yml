@@ -1,0 +1,14 @@
+---
+# 阶段 00：预检（先变量后节点，变量错不碰任何节点）。
+- name: 00 ① 变量预检（控制器本地，不连节点）
+  import_playbook: 00a-preflight-vars.yml
+
+- name: 00 ② 节点预检
+  hosts: k8s_all
+  gather_facts: true
+  any_errors_fatal: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - preflight
+  tags: [os]

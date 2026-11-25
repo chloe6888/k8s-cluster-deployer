@@ -1,0 +1,11 @@
+# {{ ansible_managed }} —— 手册 2.7：客户端配置，只写 server，不配 allow 与 local
+{% for s in ntp_servers %}
+server {{ s }} iburst
+{% endfor %}
+driftfile /var/lib/chrony/chrony.drift
+keyfile /etc/chrony/chrony.keys
+ntsdumpdir /var/lib/chrony
+maxupdateskew 100.0
+makestep 1 3
+rtcsync
+logdir /var/log/chrony

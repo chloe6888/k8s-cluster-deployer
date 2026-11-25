@@ -1,0 +1,10 @@
+---
+# 阶段 10：操作系统基线（手册第 2 章）。全部节点并行。
+- name: 10 操作系统基线
+  hosts: k8s_all
+  gather_facts: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - os_baseline
+  tags: [os]

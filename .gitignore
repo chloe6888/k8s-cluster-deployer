@@ -2,3 +2,10 @@ dist/
 *.swp
 *.log
 .DS_Store
+# 集群专属敏感文件不入库：Harbor CA、vault 变量、vault 口令文件
+inventories/*/files/
+inventories/*/group_vars/all/vault.yml
+*.vault_pass
+
+# ansible-galaxy 安装的 collections（控制机执行 ansible-galaxy collection install -r requirements.yml）
+collections/

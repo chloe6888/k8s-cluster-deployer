@@ -1,0 +1,79 @@
+---
+# 阶段 20 上半段：安装并配置 HAProxy / keepalived，三台 master 并行。
+# keepalived 的有序启动在 ha_keepalived role（serial play）。
+- name: "3.1 安装 haproxy / keepalived / socat（修订 3：健康检查脚本需要 socat）"
+  ansible.builtin.apt:
+    name: [haproxy, keepalived, socat]
+    state: present
+    update_cache: false
+  register: ha_install
+  tags: [ha, haproxy]
+
+- name: "3.1 首次安装后先停止两个服务（配置完成前不启动；默认配置的 haproxy 会被 apt 拉起）"
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop: [haproxy, keepalived]
+  when: ha_install is changed
+  tags: [ha, haproxy]
+
+- name: "3.2 写入 HAProxy 配置（haproxy -c 校验；含 stats 密码，no_log）"
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: haproxy
+    mode: "0640"
+    validate: haproxy -c -f %s
+  no_log: true
+  notify: 重启 haproxy
+  tags: [ha, haproxy]
+
+- name: "3.3 写入健康检查脚本（模板渲染只替换端口，shell 变量原样保留——修订 9）"
+  ansible.builtin.template:
+    src: check-haproxy.sh.j2
+    dest: /etc/keepalived/check-haproxy.sh
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [ha, keepalived]
+
+- name: "3.4 写入 keepalived 配置（keepalived -t 校验；含 auth_pass，no_log）"
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: keepalived -t -f %s
+  no_log: true
+  notify: 重启 keepalived（仅已启动时）
+  tags: [ha, keepalived]
+
+- name: "3.5 keepalived 在 HAProxy 之后启动（systemd drop-in）"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/keepalived.service.d/10-after-haproxy.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      After=haproxy.service
+      Wants=haproxy.service
+  notify: daemon-reload
+  tags: [ha, keepalived]
+
+- name: "3.5 锁定 haproxy / keepalived 版本"
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [haproxy, keepalived]
+  tags: [ha]
+
+- name: "3.5 三台并行：启动并启用 HAProxy"
+  ansible.builtin.systemd:
+    name: haproxy
+    state: started
+    enabled: true
+  tags: [ha, haproxy]
+
+- name: "meta：让 haproxy/keepalived 配置变更的重启先落地"
+  ansible.builtin.meta: flush_handlers

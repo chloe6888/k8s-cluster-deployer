@@ -1,0 +1,11 @@
+# 手册 7.1 metallb-values.yaml —— 由 Ansible 渲染，勿手改。
+# L2 模式无必改功能项（crds.enabled 默认 true）；离线只需三处镜像指向内网。
+controller:
+  image:
+    repository: {{ registry }}/metallb/controller
+speaker:
+  image:
+    repository: {{ registry }}/metallb/speaker
+  frr:
+    image:
+      repository: {{ registry }}/frrouting/frr    # tag 默认 10.4.1，随 Chart

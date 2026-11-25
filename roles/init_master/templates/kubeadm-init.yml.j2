@@ -1,0 +1,48 @@
+# kubeadm v1beta4 —— 手册 5.4 + 实施方案修订 2/5/6/7/8
+# 由 Ansible 渲染，勿手改；重跑阶段 50 幂等（init 由 admin.conf 存在性把关）。
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ node_ip }}          # 修订 7：apiserver 只通告内网 IP
+  bindPort: 6443
+nodeRegistration:
+  name: {{ node_name }}
+  criSocket: unix:///run/containerd/containerd.sock   # 修订 7：显式声明，不靠探测
+  taints: []                               # 修订 6：业务可调度到 master
+  kubeletExtraArgs:
+    node-ip: {{ node_ip }}
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+clusterName: kubernetes
+kubernetesVersion: v{{ kubernetes_version }}
+controlPlaneEndpoint: {{ vip }}:{{ vip_port }}         # HAProxy 前置 VIP（内外独立漂移）
+# 修订 5：证书 SAN 变量化 —— VIP、外网 VIP、各 master 内网 IP 与节点名
+apiServer:
+  certSANs:
+    - {{ vip }}
+    - {{ ext_vip }}
+{% for h in groups['masters'] %}
+    - {{ hostvars[h]['node_ip'] }}
+    - {{ hostvars[h]['node_name'] }}
+{% endfor %}
+# 决策 #19：叶子证书 10 年（87600h）、CA 20 年（175200h）。
+# 手册 5.4 示例将 175200h 写在 certificateValidityPeriod，系笔误，以此处为准。
+certificateValidityPeriod: 87600h0m0s
+caCertificateValidityPeriod: 175200h0m0s
+networking:
+  serviceSubnet: {{ service_cidr }}        # 修订 5：变量化
+  podSubnet: {{ pod_cidr }}
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+    extraArgs:
+      quota-backend-bytes: "{{ etcd_quota_bytes }}"
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: KubeProxyConfiguration
+mode: Nftables        # 决策 #10：1.36 nftables 模式（reset 阶段只清理 kube-proxy 自己的 nft 表）
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd   # 与 containerd SystemdCgroup=true 对齐

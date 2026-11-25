@@ -1,0 +1,71 @@
+# {{ ansible_managed }} —— 手册 3.2；三台相同，仅 stats bind 的本机 IP 不同。
+# 外网 frontend 增加授权网段白名单（实施方案修订点 1）。
+global
+        log /dev/log    local0
+        log /dev/log    local1 notice
+        chroot /var/lib/haproxy
+        stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+        stats timeout 30s
+        user haproxy
+        group haproxy
+        daemon
+        maxconn 20000
+
+defaults
+        log     global
+        mode    tcp
+        option  tcplog
+        option  dontlognull
+        option  redispatch
+        option  clitcpka
+        option  srvtcpka
+        retries 3
+        timeout connect    5s
+        timeout client     3600s
+        timeout server     3600s
+        timeout client-fin 30s
+        timeout server-fin 30s
+
+# 内网入口：kubeadm 的 controlPlaneEndpoint
+# 依赖 net.ipv4.ip_nonlocal_bind=1，本机未持有 VIP 时（keepalived BACKUP）也能启动
+# 注意：若 haproxy 与 apiserver 同机，VIP_PORT 不能是 6443
+frontend kube-apiserver
+        mode  tcp
+        bind  {{ vip }}:{{ vip_port }}
+        default_backend  kube-apiserver-backend
+
+# 外网运维入口：仅授权网段（白名单外直接拒绝，修订点 1）
+frontend kube-apiserver-ext
+        mode  tcp
+        bind  {{ ext_vip }}:{{ vip_port }}
+        acl allowed_src src{% for c in ext_api_allowed_cidr %} {{ c }}{% endfor %}
+        tcp-request connection reject if !allowed_src
+        default_backend  kube-apiserver-backend
+
+# 统计页：只监听本机内网 IP，使用独立的短超时
+listen stats
+        mode    http
+        option  httplog
+        bind    {{ node_ip }}:8888
+        timeout client  30s
+        timeout server  30s
+        timeout http-request 10s
+        stats auth    {{ stats_user }}:{{ stats_pass }}
+        stats refresh    5s
+        stats realm    HAproxy\Statistics
+        stats uri   /stats
+
+backend kube-apiserver-backend
+        mode        tcp
+        balance     leastconn
+        # 后端状态变化（摘除/恢复）写入日志
+        option      log-health-checks
+        # /readyz 在 apiserver 优雅停止时先失败，可提前摘除；匿名可访问。
+        # 若日后关闭 --anonymous-auth，删除下面 3 行 http 检查，server 行只保留 check
+        option      httpchk
+        http-check  send meth GET uri /readyz ver HTTP/1.1 hdr Host localhost
+        http-check  expect status 200
+        default-server inter 2s fall 3 rise 2 on-marked-down shutdown-sessions slowstart 10s
+{% for h in groups['masters'] %}
+        server {{ hostvars[h]['node_name'] }} {{ hostvars[h]['node_ip'] }}:6443 check check-ssl verify none
+{% endfor %}

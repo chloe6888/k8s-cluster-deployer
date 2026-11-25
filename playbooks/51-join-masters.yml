@@ -1,0 +1,11 @@
+---
+# 阶段 51：master02/03 加入控制面（手册 5.5；serial:1 逐台）。
+- name: 51 加入其余 master
+  hosts: masters:!first_master
+  gather_facts: true
+  serial: 1
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - join_masters
+  tags: [kubeadm]

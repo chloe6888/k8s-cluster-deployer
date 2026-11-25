@@ -1,0 +1,243 @@
+---
+# 阶段 10：系统基线（手册第 2 章，除 2.5 内核固定外）。全部节点并行。
+# 幂等要求：第二次运行 changed=0。
+
+- name: "2.1 设置主机名"
+  ansible.builtin.hostname:
+    name: "{{ node_name }}"
+  tags: [os, hostname]
+
+- name: "2.1 写入 /etc/hosts 受管区块（全部节点 内网IP 节点名）"
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} k8s-cluster-deployer managed"
+    block: "{{ hosts_lines }}"
+  vars:
+    hosts_lines: >-
+      {{ groups['k8s_all'] | map('extract', hostvars, 'node_ip')
+         | zip(groups['k8s_all'] | map('extract', hostvars, 'node_name'))
+         | map('join', ' ') | join('\n') }}
+  tags: [os, hostname]
+
+- name: "2.1 确认 Harbor 域名可解析"
+  ansible.builtin.command:
+    cmd: "getent hosts {{ harbor.split(':')[0] }}"
+  changed_when: false
+  failed_when: harbor_check.rc != 0
+  register: harbor_check
+  tags: [os, hostname, verify]
+
+- name: "2.2 开机加载清单：k8s.conf（overlay / br_netfilter / ipip）"
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: |
+      overlay
+      br_netfilter
+      ipip
+  notify: 重新加载内核模块
+  tags: [os, modules]
+
+- name: "2.3 开机加载清单：nftables.conf（nf_tables / nf_nat / nf_conntrack）"
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/nftables.conf
+    mode: "0644"
+    content: |
+      nf_tables
+      nf_nat
+      nf_conntrack
+  notify: 重新加载内核模块
+  tags: [os, modules]
+
+- name: "2.2/2.3 立即加载内核模块"
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
+  tags: [os, modules]
+
+- name: "2.2 写入 sysctl 9 项参数（rp_filter 显式写入，防加固基线改回 1，勿因与默认重复而删除）"
+  ansible.builtin.template:
+    src: k8s-sysctl.conf.j2
+    dest: /etc/sysctl.d/k8s.conf
+    mode: "0644"
+  register: os_sysctl_file
+  tags: [os, sysctl]
+
+- name: "2.2 应用 sysctl（sysctl --system）"
+  ansible.builtin.command:
+    cmd: sysctl --system
+  when: os_sysctl_file is changed
+  changed_when: false
+  tags: [os, sysctl]
+
+- name: "2.3 安装 nftables 命令行工具（只用 CLI，不用服务）"
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+    update_cache: false
+  tags: [os, nftables]
+
+- name: "2.3 nftables 服务禁止开机启动（不加 --now，stop 即 flush ruleset）"
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: false
+  tags: [os, nftables]
+
+- name: "2.3 mask nftables 服务（start/stop/reload 均被 systemd 拒绝）"
+  ansible.builtin.systemd:
+    name: nftables
+    masked: true
+  tags: [os, nftables]
+
+- name: "2.3 可选：新装集群节点上把空闲的 nftables 服务停下（默认不做）"
+  when: nftables_stop_if_idle | bool
+  block:
+    - name: 读取 nftables 服务状态与规则集
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - systemctl is-active nftables
+        - nft list ruleset
+      register: nft_idle_probe
+      changed_when: false
+
+    - name: 满足“未加入集群 + 规则集为空 + 服务 active”才停止
+      ansible.builtin.systemd:
+        name: nftables
+        state: stopped
+      when:
+        - not (ansible_interfaces | default([]) | intersect(['tunl0']))
+        - nft_idle_probe.results[0].stdout == 'active'
+        - nft_idle_probe.results[1].stdout | trim == ''
+  tags: [os, nftables]
+
+- name: "2.4 检查 swap 状态"
+  ansible.builtin.command:
+    cmd: swapon --show
+  register: os_swapon
+  changed_when: false
+  tags: [os, swap]
+
+- name: "2.4 关闭 swap"
+  ansible.builtin.command:
+    cmd: swapoff -a
+  when: os_swapon.stdout | trim != ''
+  changed_when: os_swapon.stdout | trim != ''
+  tags: [os, swap]
+
+- name: "2.4 注释 /etc/fstab 中的 /swap.img"
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '(?<!#)^\s*(/swap\.img\s)'
+    replace: '#\1'
+  tags: [os, swap]
+
+- name: "2.6 检查 systemd-resolved 上游文件"
+  ansible.builtin.stat:
+    path: /run/systemd/resolve/resolv.conf
+  register: os_resolv_conf
+  tags: [os, dns]
+
+- name: "2.6 安装并启动 systemd-resolved（文件缺失时）"
+  when: not os_resolv_conf.stat.exists
+  ansible.builtin.apt:
+    name: systemd-resolved
+    state: present
+  notify: 重启 systemd-resolved
+  tags: [os, dns]
+
+- name: "2.7 安装 chrony（自动卸载 timesyncd 属预期）"
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+  tags: [os, chrony]
+
+- name: "2.7 写入 chrony 配置（仅 server 行，不配 allow/local）"
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    mode: "0644"
+  notify: 重启 chrony
+  tags: [os, chrony]
+
+- name: "2.8 写入 journald 容量限制"
+  ansible.builtin.template:
+    src: journald.conf.j2
+    dest: /etc/systemd/journald.conf.d/10-k8s-node.conf
+    mode: "0644"
+  notify: 重启 journald
+  tags: [os, journald]
+
+- name: "meta：先触发服务重启，再做验证"
+  ansible.builtin.meta: flush_handlers
+
+- name: "2.7 确保 chrony 开机启动"
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started
+  tags: [os, chrony]
+
+# ---- 验证 ----
+- name: 读取 sysctl 当前值（不用 facts：gather 在应用 sysctl 之前）
+  ansible.builtin.command:
+    cmd: "sysctl -n {{ item.key }}"
+  loop: "{{ sysctl_expect | dict2items }}"
+  register: os_sysctl_read
+  changed_when: false
+  vars:
+    sysctl_expect:
+      net.bridge.bridge-nf-call-ip6tables: "1"
+      net.bridge.bridge-nf-call-iptables: "1"
+      net.ipv4.ip_forward: "1"
+      net.ipv4.ip_nonlocal_bind: "1"
+      net.ipv4.conf.all.rp_filter: "2"
+      net.ipv4.conf.default.rp_filter: "2"
+      fs.inotify.max_user_instances: "8192"
+      fs.inotify.max_user_watches: "1048576"
+      fs.inotify.max_queued_events: "65536"
+  tags: [os, sysctl, verify]
+
+- name: 验证 sysctl 9 项与手册一致
+  ansible.builtin.assert:
+    that: "{{ sysctl_expect | dict2items | map(attribute='value') | list }}"
+    quiet: true
+  vars:
+    sysctl_expect:
+      net.bridge.bridge-nf-call-ip6tables: "{{ os_sysctl_read.results[0].stdout | trim == '1' }}"
+      net.bridge.bridge-nf-call-iptables: "{{ os_sysctl_read.results[1].stdout | trim == '1' }}"
+      net.ipv4.ip_forward: "{{ os_sysctl_read.results[2].stdout | trim == '1' }}"
+      net.ipv4.ip_nonlocal_bind: "{{ os_sysctl_read.results[3].stdout | trim == '1' }}"
+      net.ipv4.conf.all.rp_filter: "{{ os_sysctl_read.results[4].stdout | trim == '2' }}"
+      net.ipv4.conf.default.rp_filter: "{{ os_sysctl_read.results[5].stdout | trim == '2' }}"
+      fs.inotify.max_user_instances: "{{ os_sysctl_read.results[6].stdout | trim == '8192' }}"
+      fs.inotify.max_user_watches: "{{ os_sysctl_read.results[7].stdout | trim == '1048576' }}"
+      fs.inotify.max_queued_events: "{{ os_sysctl_read.results[8].stdout | trim == '65536' }}"
+  tags: [os, sysctl, verify]
+
+- name: 验证 swap 已关闭
+  ansible.builtin.command:
+    cmd: swapon --show
+  register: os_swapon_after
+  changed_when: false
+  failed_when: os_swapon_after.stdout | trim != ''
+  tags: [os, swap, verify]
+
+- name: 验证 nftables 已 mask
+  ansible.builtin.command:
+    cmd: systemctl show -p UnitFileState nftables
+  register: os_nft_state
+  changed_when: false
+  failed_when: os_nft_state.stdout != 'UnitFileState=masked'
+  tags: [os, nftables, verify]
+
+- name: 验证 chrony 至少有一个可用源（初次同步最多等 2 分钟）
+  ansible.builtin.command:
+    cmd: chronyc sources
+  register: os_chrony_sources
+  changed_when: false
+  until: os_chrony_sources.stdout is match('(?s)^.*\^\*')
+  retries: 24
+  delay: 5
+  tags: [os, chrony, verify]

@@ -1,0 +1,5 @@
+---
+node_ip: 10.144.67.2
+node_ext_ip: 10.144.71.2
+ka_state: BACKUP
+ka_priority: 90

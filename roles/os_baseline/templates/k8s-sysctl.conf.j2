@@ -1,0 +1,10 @@
+# {{ ansible_managed }} —— 手册 2.2 全部 9 项；rp_filter 显式写入防加固基线改回 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+net.ipv4.ip_nonlocal_bind = 1
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_queued_events = 65536

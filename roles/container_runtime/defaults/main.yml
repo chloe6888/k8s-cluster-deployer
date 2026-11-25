@@ -1,0 +1,30 @@
+---
+# 需要配置 certs.d 的 registry 主机：Harbor 必配；app_registry 非空且主机不同才加
+runtime_registry_hosts: >-
+  {{ [harbor] + ([app_registry] if (app_registry | default('') != '' and app_registry != harbor) else []) }}
+
+# Harbor CA：默认取本集群 inventory 的 files/harbor-ca.crt（实施方案待确认 2）
+runtime_harbor_ca_file: "{{ inventory_dir }}/files/harbor-ca.crt"
+runtime_app_registry_ca_file: "{{ inventory_dir }}/files/harbor-ca.crt"
+
+# 阶段 30 镜像预检清单（实施方案 §6.5；K8s 系统镜像由阶段 50 kubeadm config images pull 验证）
+runtime_required_images:
+  - "{{ registry }}/pause:{{ pause_version }}"
+  - "{{ registry }}/tigera/operator:{{ tigera_operator_image_tag }}"
+  - "{{ registry }}/calico/node:v{{ calico_version }}"
+  - "{{ registry }}/calico/cni:v{{ calico_version }}"
+  - "{{ registry }}/calico/typha:v{{ calico_version }}"
+  - "{{ registry }}/calico/kube-controllers:v{{ calico_version }}"
+  - "{{ registry }}/calico/apiserver:v{{ calico_version }}"
+  - "{{ registry }}/calico/pod2daemon-flexvol:v{{ calico_version }}"
+  - "{{ registry }}/calico/key-cert-provisioner:v{{ calico_version }}"
+  - "{{ registry }}/metallb/controller:v{{ metallb_version }}"
+  - "{{ registry }}/metallb/speaker:v{{ metallb_version }}"
+  - "{{ registry }}/frrouting/frr:{{ metallb_frr_image_tag }}"
+  - "{{ registry }}/envoyproxy/gateway:v{{ envoy_gateway_version }}"
+  - "{{ registry }}/envoyproxy/envoy:{{ envoy_proxy_image_tag }}"
+
+# 手册 1.6 注明以安装后实测为准：失败只提示不中止
+runtime_optional_images:
+  - "{{ registry }}/calico/csi:v{{ calico_version }}"
+  - "{{ registry }}/calico/node-driver-registrar:v{{ calico_version }}"

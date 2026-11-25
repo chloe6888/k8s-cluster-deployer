@@ -1,0 +1,19 @@
+---
+# 展平文件名（部署手册 1.6 / 决策 #25）→ 本仓库相对路径 的映射。
+# 版本号取自 config/versions.yml（playbook 已引入），勿在此写死版本。
+artifact_repo_map_defaults:
+  "containerd-{{ containerd_version }}-linux-amd64.tar.gz": >-
+    artifacts/binaries/amd64/containerd/{{ containerd_version }}/containerd-{{ containerd_version }}-linux-amd64.tar.gz
+  "runc.amd64": "artifacts/binaries/amd64/runc/{{ runc_version }}/runc.amd64"
+  "runc.sha256sum": "artifacts/binaries/amd64/runc/{{ runc_version }}/runc.sha256sum"
+  "nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz": "artifacts/binaries/amd64/nerdctl/{{ nerdctl_version }}/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
+  "helm-v{{ helm_version }}-linux-amd64.tar.gz": "artifacts/tools/helm/{{ helm_version }}/helm-v{{ helm_version }}-linux-amd64.tar.gz"
+  "Release.key": "artifacts/keys/kubernetes/Release.key"
+  "tigera-operator-v{{ calico_version }}.tgz": "artifacts/charts/calico/{{ calico_version }}/tigera-operator-v{{ calico_version }}.tgz"
+  "crd.projectcalico.org.v1-v{{ calico_version }}.tgz": "artifacts/charts/calico/{{ calico_version }}/crd.projectcalico.org.v1-v{{ calico_version }}.tgz"
+  "metallb-{{ metallb_version }}.tgz": "artifacts/charts/metallb/{{ metallb_version }}/metallb-{{ metallb_version }}.tgz"
+  "gateway-helm-v{{ envoy_gateway_version }}.tgz": "artifacts/charts/envoy-gateway/{{ envoy_gateway_version }}/gateway-helm-v{{ envoy_gateway_version }}.tgz"
+  "calico-{{ calico_version }}.yaml": "artifacts/manifests/calico/{{ calico_version }}/calico.yaml"
+  "metallb-native-v{{ metallb_version }}.yaml": "artifacts/manifests/metallb/{{ metallb_version }}/metallb-native.yaml"
+  "envoy-gateway-install-v{{ envoy_gateway_version }}.yaml": "artifacts/manifests/envoy-gateway/{{ envoy_gateway_version }}/envoy-gateway-install.yaml"
+  "containerd.service": "templates/systemd/containerd.service.j2"

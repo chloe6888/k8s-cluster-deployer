@@ -1,0 +1,10 @@
+---
+# 阶段 60：Calico 3.32.2 两件套 Chart（手册第 6 章；只跑 master01）。
+- name: 60 Calico
+  hosts: first_master
+  gather_facts: true
+  vars_files: ../config/versions.yml
+  roles:
+    - common
+    - calico
+  tags: [cni]

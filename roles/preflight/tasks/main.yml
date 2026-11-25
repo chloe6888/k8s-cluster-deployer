@@ -1,0 +1,138 @@
+---
+# 阶段 00 第二段：节点侧预检（全部只读，不修改节点）。任何一项失败直接中止并指出节点与变量。
+- name: 系统与登录方式（Ubuntu 24.04 / amd64 / root）
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('24.04', '==')
+      - ansible_architecture == 'x86_64'
+      - ansible_user_uid is defined and ansible_user_uid == 0
+    fail_msg: >-
+      {{ inventory_hostname }}：要求 Ubuntu 24.04 amd64 且以 root 执行
+      （实际 {{ ansible_distribution }} {{ ansible_distribution_version }} {{ ansible_architecture }}，uid={{ ansible_user_uid | default('未知') }}）
+    quiet: true
+  tags: [verify, preflight]
+
+- name: 读取 machine-id 与 product_uuid
+  ansible.builtin.command:
+    cmd: "cat {{ item.src }}"
+  loop:
+    - { src: /etc/machine-id }
+    - { src: /sys/class/dmi/id/product_uuid }
+  register: preflight_ids
+  changed_when: false
+
+- name: 记录节点标识
+  ansible.builtin.set_fact:
+    node_machine_id: "{{ preflight_ids.results[0].stdout }}"
+    node_product_uuid: "{{ preflight_ids.results[1].stdout }}"
+
+- name: 唯一性断言（machine-id / product_uuid / node_ip / node_name 全集群互不相同）
+  ansible.builtin.assert:
+    that:
+      - node_machine_id_list | length == node_machine_id_list | unique | length
+      - node_product_uuid_list | length == node_product_uuid_list | unique | length
+    fail_msg: >-
+      存在重复节点标识（克隆机最常见，会导致 join 异常）：
+      machine-id 重复 {{ node_machine_id_list | length - node_machine_id_list | unique | length }} 台、
+      product_uuid 重复 {{ node_product_uuid_list | length - node_product_uuid_list | unique | length }} 台。
+      逐台核对：{{ dict(node_name_list | zip(node_machine_id_list)) }}
+    quiet: true
+  vars:
+    node_machine_id_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_machine_id') | list }}"
+    node_product_uuid_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_product_uuid') | list }}"
+    node_name_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_name') | list }}"
+  run_once: true
+  tags: [verify, preflight]
+
+- name: 网卡存在（node_iface / ext_iface）
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ item }}"
+  loop:
+    - "{{ node_iface }}"
+    - "{{ ext_iface }}"
+  register: preflight_ifaces
+  failed_when: not preflight_ifaces.results[idx].stat.exists
+  loop_control:
+    index_var: idx
+  tags: [verify, preflight]
+
+- name: node_ip 绑定在内网网卡上
+  ansible.builtin.command:
+    cmd: "ip -4 -o addr show dev {{ node_iface }} scope global"
+  register: preflight_addr
+  changed_when: false
+  failed_when: preflight_addr.stdout is not search(node_ip ~ '/')
+  tags: [verify, preflight]
+
+- name: 默认路由只有一条且在外网网卡
+  ansible.builtin.command:
+    cmd: ip -4 route show default
+  register: preflight_default_route
+  changed_when: false
+  failed_when: >-
+    preflight_default_route.stdout_lines | length != 1
+    or preflight_default_route.stdout is not search('dev ' ~ ext_iface)
+  tags: [verify, preflight]
+
+- name: Harbor 域名可解析
+  ansible.builtin.command:
+    cmd: "getent ahostsv4 {{ harbor.split(':')[0] }}"
+  register: preflight_harbor_resolv
+  changed_when: false
+  failed_when: preflight_harbor_resolv.rc != 0 or preflight_harbor_resolv.stdout | length == 0
+  tags: [verify, preflight]
+
+- name: 访问 Harbor 的路由走内网网卡（dev node_iface、src node_ip）
+  ansible.builtin.command:
+    cmd: "ip route get {{ preflight_harbor_ip }}"
+  vars:
+    preflight_harbor_ip: "{{ preflight_harbor_resolv.stdout.split()[0] }}"
+  register: preflight_harbor_route
+  changed_when: false
+  failed_when: >-
+    preflight_harbor_route.stdout is not search('dev ' ~ node_iface)
+    or preflight_harbor_route.stdout is not search('src ' ~ node_ip)
+  tags: [verify, preflight]
+
+- name: VIP 归属网段检查（内网 VIP 在 node_cidr、外网 VIP 与本机外网地址同网段）
+  ansible.builtin.script: check_vip.py
+  args:
+    executable: /usr/bin/env python3
+  environment:
+    K8S_VARS: >-
+      {{ { 'vip': vip, 'node_cidr': node_cidr,
+           'ext_vip': ext_vip, 'ext_vip_prefix': ext_vip_prefix | default(24),
+           'node_ext_ip': node_ext_ip } | to_json }}
+  changed_when: false
+  tags: [verify, preflight]
+
+- name: 网段冲突检查（手册 1.4；已装 Calico 的节点跳过，避免 Pod 路由误报）
+  ansible.builtin.script: check_overlap.py
+  args:
+    executable: /usr/bin/env python3
+  environment:
+    K8S_VARS: >-
+      {{ { 'pod_cidr': pod_cidr, 'service_cidr': service_cidr,
+           'node_cidr': node_cidr, 'extra_nets': extra_nets | default([]) } | to_json }}
+  when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
+  changed_when: false
+  tags: [verify, preflight]
+
+- name: apt 缓存刷新（修订 15：提前暴露内网镜像站缺包）
+  ansible.builtin.command:
+    cmd: apt-get update
+  changed_when: false
+  tags: [verify, preflight]
+
+- name: 系统包候选版本检查（haproxy/keepalived/socat/chrony/nftables/gnupg）
+  ansible.builtin.command:
+    cmd: "apt-cache policy {{ item }}"
+  loop: [haproxy, keepalived, socat, chrony, nftables, gnupg]
+  register: preflight_apt
+  changed_when: false
+  failed_when: preflight_apt.results[idx].stdout is search('Candidate:[ ]+\\(none\\)')
+  loop_control:
+    index_var: idx
+    label: "{{ item }}"
+  tags: [verify, preflight]

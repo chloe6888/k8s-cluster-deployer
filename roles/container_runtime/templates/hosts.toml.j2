@@ -1,0 +1,6 @@
+# {{ ansible_managed }} —— 手册 4.2：server 为 https，capabilities 为 pull 与 resolve，ca 指向本目录 CA
+server = "https://{{ registry_host }}"
+
+[host."https://{{ registry_host }}"]
+capabilities = ["pull", "resolve"]
+ca = "/etc/containerd/certs.d/{{ registry_host }}/ca.crt"

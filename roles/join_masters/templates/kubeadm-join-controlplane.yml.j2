@@ -1,0 +1,20 @@
+# 本节点专用的控制面 join 配置（含 token / certificate-key，0600，join 成功后删除）。
+# token 与 certificate-key 每次 join 前在 master01 重新生成（实施方案 §6.9）。
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: {{ vip }}:{{ vip_port }}
+    token: {{ jm_token.stdout | trim }}
+    caCertHashes:
+      - sha256:{{ jm_ca_hash.stdout | trim }}
+nodeRegistration:
+  name: {{ node_name }}
+  criSocket: unix:///run/containerd/containerd.sock   # 修订 7
+  taints: []                               # 修订 6：master 不加污点
+  kubeletExtraArgs:
+    node-ip: {{ node_ip }}
+controlPlane:
+  apiserverAdvertiseAddress: {{ node_ip }}   # 只通告内网 IP
+  apiserverBindPort: 6443
+  certificateKey: {{ jm_upload.stdout_lines | last | trim }}

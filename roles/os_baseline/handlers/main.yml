@@ -1,0 +1,22 @@
+---
+- name: 重新加载内核模块
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
+
+- name: 重启 systemd-resolved
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    state: restarted
+    enabled: true
+
+- name: 重启 chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: restarted
+
+- name: 重启 journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
