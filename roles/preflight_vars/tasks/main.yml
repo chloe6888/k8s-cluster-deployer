@@ -1,5 +1,21 @@
 ---
 # 阶段 00 第一段：控制机侧变量预检（只读）。在 localhost 上执行。
+- name: 断言已用 -i 显式指定集群 inventory
+  ansible.builtin.assert:
+    that: groups['k8s_all'] | default([]) | length > 0
+    fail_msg: >-
+      未加载到任何集群节点（本工程 ansible.cfg 刻意不设默认 inventory）。
+      请加 -i inventories/<集群>（cqjf / ms / msbc / test / example）重新执行，防止跑错集群。
+
+- name: 当前集群横幅（防跑错集群，执行前肉眼确认）
+  ansible.builtin.debug:
+    msg:
+      - "══════════════════════════════════════════════════════════"
+      - " 集群 {{ cluster_prefix | upper }} │ inventory {{ ansible_inventory_sources | first | basename }}"
+      - " {{ groups['k8s_all'] | length }} 节点 = {{ groups['masters'] | length }} master + {{ groups['workers'] | default([]) | length }} worker"
+      - " 内网 {{ node_cidr }} VIP {{ vip }} │ 外网 VIP {{ ext_vip }} │ VRID {{ ka_vrid }}/{{ ka_ext_vrid }}"
+      - "══════════════════════════════════════════════════════════"
+
 - name: 组装 masters / nodes 数据（从 inventory hostvars 提取）
   ansible.builtin.set_fact:
     preflight_payload:
@@ -7,6 +23,7 @@
       harbor: "{{ harbor }}"
       mirror: "{{ mirror }}"
       apt_k8s_url: "{{ apt_k8s_url }}"
+      ntp_servers: "{{ ntp_servers }}"
       node_iface: "{{ node_iface }}"
       ext_iface: "{{ ext_iface }}"
       node_cidr: "{{ node_cidr }}"

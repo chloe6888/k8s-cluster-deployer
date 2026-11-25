@@ -1,0 +1,70 @@
+---
+# msbc 集群公共变量【占位骨架】：网络/VIP/VRID 均为占位值，部署前逐项替换为实测值；
+# 组件版本不在本文件：各 playbook 从 config/versions.yml 引入（唯一事实源）。
+# 密码与证书路径在 vault.yml（见同目录 vault.yml.example，ansible-vault 加密）。
+
+## 集群标识与内网服务
+cluster_prefix: msbc                    # 全小写；用于节点名、HAProxy 后端名
+harbor: harbor.example.internal         # Harbor 域名（含端口时一并写入）
+mirror: http://mirror.example.internal  # 内网制品 / apt 镜像站根 URL
+app_registry: ""                        # 业务镜像仓库主机（为空则不单独配置 certs.d）
+apt_k8s_url: http://mirror.example.internal/repository/kubernetes-v1.36/deb/   # 以 / 结尾，不得指向公网
+ntp_servers:                            # 内网 NTP，建议至少 2 个
+  - 10.3.0.10
+  - 10.3.0.11
+
+## 派生变量（勿手填）
+registry: "{{ harbor }}/k8s_dmz"        # 系统镜像项目，必须为公开项目
+file_url: "{{ mirror }}/repository/tmp-file/k8sv1.36"
+
+## 网卡与网段（双网卡：内网承 API/etcd/Pod，外网承默认路由/业务入口）
+node_iface: vlan1514               # 占位：按本集群实际内网网卡名替换
+ext_iface: vlan1254                # 占位：按本集群实际外网网卡名替换
+node_cidr: 10.3.0.0/24
+pod_cidr: 10.248.0.0/14                 # 须通过阶段 00 网段冲突检查
+service_cidr: 10.128.0.0/12
+extra_nets: []                          # 路由表看不到但实际存在的网段（Harbor/存储/运维）
+
+## VIP（keepalived，内外独立漂移）
+vip: 10.3.0.200                      # 须在 node_cidr 内且未占用
+vip_prefix: 24
+ext_vip: 10.103.0.200                  # 须在外网网段内且未占用，且与 ext_iface 同网段
+ext_vip_prefix: 24
+vip_port: 16443                         # haproxy 与 apiserver 同机时不能是 6443
+ext_api_allowed_cidr:                   # 外网 API 授权网段；不得含 0.0.0.0/0
+  - 10.103.0.0/24
+ka_vrid: 55                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
+ka_ext_vrid: 56
+ka_advert_int: 1                        # 修订点 13：内外网统一 1
+ka_ext_advert_int: 1
+ka_unicast_internal: false              # 内网二层禁组播时置 true（单播变体，手册 3.4）
+ka_unicast_external: false
+
+## MetalLB（L2）与业务入口
+metallb_ext_range: 10.103.0.210-10.103.0.219   # 须避开节点外网 IP 与 ext_vip
+gw_ext_ip: 10.103.0.210                # 须在 metallb_ext_range 内
+gw_tls_secret: gw-ext-tls
+gw_http_redirect: false                 # true 时创建 80→443 的 301 跳转（接管 80 未匹配流量）
+
+## kubeadm
+etcd_quota_bytes: 4294967296            # 4G；2147483648 为 2G（etcd 默认）
+
+## Ansible 行为开关（实施方案 §4）
+worker_batch_size: 10                   # 阶段 70 每批 worker 数
+artifact_source: file_url               # file_url=节点从文件站下载（默认）；repo=控制机从本仓库 artifacts/ 推送
+pin_kernel: false                       # 阶段 11 总开关，true 才执行（会重启节点，单独执行）
+purge_old_kernels: false                # 清理旧内核开关（阶段 11 ④）
+nftables_stop_if_idle: false            # 见 os_baseline；默认不动该服务
+journald_system_max_use: 4G
+preload_images: []                      # worker 预拉业务镜像（原 IMAGE_LIST），如 ["demo.example/app:v1.0"]
+busybox_tag: ""                         # 阶段 90 连通性测试镜像 tag；为空则跳过该测试
+
+## Release.key 校验值（上传公钥到文件站时登记，阶段 40 核对；为空则跳过指纹断言）
+k8s_release_key_sha256: ""
+k8s_release_key_fingerprint: ""
+
+## 节点上的工作目录（手册各章 cd /data/package）
+package_dir: /data/package
+
+## 派生：是否启用 Gateway 443（vault 中 gw_tls_cert 非空即启用）
+gw_tls_enabled: "{{ (gw_tls_cert | default('') | length > 0) }}"

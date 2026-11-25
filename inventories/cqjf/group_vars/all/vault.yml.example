@@ -1,0 +1,14 @@
+---
+# 密码与证书变量（原手册 §1.3② k8s-secrets.env）。
+# 使用：复制为同目录下的 vault.yml，填好取值后加密：
+#   cp vault.yml.example vault.yml && vim vault.yml
+#   ansible-vault encrypt vault.yml
+# 注意（实施方案约定 3）：文件名必须叫 vault.yml 且必须放在 group_vars/all/ 目录里才会被自动加载；
+# vault.yml 与本示例均不入仓库（见 .gitignore）；cqjf 集群建议独立 vault 口令。运行时加 --vault-password-file。
+# gw_tls_cert / gw_tls_key 是控制机上的文件路径（证书链含中间 CA；私钥 600），留空则 Gateway 不启用 443。
+
+ka_auth_pass: "ChangeMe"   # VRRP 认证口令，≤8 位，三台 master 相同
+stats_user: admin          # HAProxy 统计页账号（原 STATS_AUTH 拆分，修订点 10）
+stats_pass: "ChangeMe"
+gw_tls_cert: ""            # 例如 /root/secrets/gw-ext/fullchain.pem
+gw_tls_key: ""             # 例如 /root/secrets/gw-ext/privkey.pem

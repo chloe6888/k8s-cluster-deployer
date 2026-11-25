@@ -1,0 +1,8 @@
+---
+# 节点变量（原手册 §1.3③ node.env，每台各一份，不得拷贝）
+# node_ip 必须显式写入（预检断言落在 node_cidr 内）；不要用 ansible_default_ipv4（默认路由在外网网卡）。
+node_ip: 10.4.0.3
+node_ext_ip: 10.104.0.3
+# keepalived：master01=MASTER/100，02=BACKUP/90，03=BACKUP/80（预检断言，防止写错）
+ka_state: BACKUP
+ka_priority: 80

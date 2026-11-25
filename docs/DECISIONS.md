@@ -46,3 +46,4 @@ Kubernetes 1.36.6 离线高可用集群 —— 讨论阶段结论汇总。
 | 30 | 手册修订点 | 实施时按方案第 5 节 15 条修订执行（外网 frontend 白名单、certSANs 加外网 VIP、socat 随 HAProxy 安装、certs.d/hosts.toml 补齐、etcd 块归位、污点用默认、网段变量化、criSocket /run、检查脚本模板渲染、STATS_AUTH 拆分、443 监听、master join 闸门不要求 Ready、advert_int 统一 1、镜像预检前置、apt 候选预检） |
 | 31 | 镜像/系统包前置检查 | 阶段 30 在 master01 用 nerdctl 逐个预拉系统镜像（csi 与 node-driver-registrar 失败仅告警，其余失败即中止）；阶段 00 检查 haproxy/keepalived/socat/chrony/nftables/gnupg 的 apt 候选版本 |
 | 32 | 内核与重置开关 | `pin_kernel`、`purge_old_kernels` 默认 false；重置 playbook 须 `-e confirm_reset=yes`，清理 nft 时只删自建表（kube-proxy），任何阶段禁止 `nft flush ruleset` |
+| 33 | 四集群规划（2026-11-25） | 一套代码 + 四个 inventory：`inventories/{cqjf,ms,msbc,test}/` 占位骨架已入库，`inventories/example/` 保留为注释参考样例；VRID 按 51/52、53/54、55/56、57/58 互不重叠预分配（跨二层也安全）；Pod/Service CIDR 四集群错开；组件版本只认 `config/versions.yml`（全局统一，升级四集群同步）；vault 与 Harbor CA 每集群独立；`ansible.cfg` 刻意不设默认 inventory，必须 `-i` 显式指定，preflight-vars 打印集群横幅防跑错；上线顺序 test → cqjf → ms → msbc |
