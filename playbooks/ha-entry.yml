@@ -1,7 +1,7 @@
 ---
 # 阶段 20：高可用入口（手册 3.1–3.6 + 3.8/3.9 启动次序）。
 # 三段：并行装配置 → serial:1 按序拉起（master01 先持 VIP）→ 汇总验证。
-- name: 20 ① HAProxy / keepalived 安装与配置（masters 并行）
+- name: ① HAProxy / keepalived 安装与配置（masters 并行）
   hosts: masters
   gather_facts: true
   vars_files: ../config/versions.yml
@@ -10,7 +10,7 @@
     - ha_entry
   tags: [ha]
 
-- name: 20 ② 按优先级串行拉起（master01 先持有两个 VIP）
+- name: ② 按优先级串行拉起（master01 先持有两个 VIP）
   hosts: masters
   gather_facts: false
   serial: 1
@@ -19,7 +19,7 @@
     - ha_keepalived
   tags: [ha]
 
-- name: 20 ③ 双 VIP 汇总验证（master01 单点检查）
+- name: ③ 双 VIP 汇总验证（master01 单点检查）
   hosts: first_master
   gather_facts: false
   vars_files: ../config/versions.yml

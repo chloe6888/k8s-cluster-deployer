@@ -1,5 +1,5 @@
 ---
-# 阶段 99：重置集群（独立执行：ansible-playbook playbooks/99-reset.yml -e confirm_reset=yes）。
+# 阶段 99：重置集群（独立执行：ansible-playbook playbooks/reset.yml -e confirm_reset=yes）。
 # 双确认：命令行必须显式传 confirm_reset=yes；HA（haproxy/keepalived）与系统基线不动。
 - name: 重置确认门禁（未显式确认则拒绝执行）
   ansible.builtin.assert:

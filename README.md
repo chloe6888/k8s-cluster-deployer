@@ -23,15 +23,15 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 # 准备：换集群 = 换 inventory 目录（默认 inventories/example）
 # 密码变量放 inventories/<集群>/group_vars/all/vault.yml（ansible-vault 加密，已被 .gitignore 排除）
 
-ansible-playbook playbooks/site.yml --vault-password-file ~/.vault_pass          # 整体部署（不含 11/99）
-ansible-playbook playbooks/20-ha-entry.yml                                      # 单阶段
-ansible-playbook playbooks/20-ha-entry.yml --tags haproxy                       # 单步骤
-ansible-playbook playbooks/20-ha-entry.yml --tags verify                        # 只做验证
-ansible-playbook playbooks/20-ha-entry.yml --limit k8s-master01                 # 单台主机
-ansible-playbook playbooks/70-join-workers.yml --limit k8s-worker11,k8s-worker12  # worker 灰度
-ansible-playbook playbooks/11-kernel-pin.yml                                    # 固定内核（需 pin_kernel=true，会重启）
-ansible-playbook playbooks/90-verify.yml --tags failover                        # VIP 漂移演练（仅测试环境）
-ansible-playbook playbooks/99-reset.yml -e confirm_reset=yes                    # 重置（仅测试环境）
+ansible-playbook playbooks/site.yml --vault-password-file ~/.vault_pass    # 整体部署（不含 kernel-pin/reset）
+ansible-playbook playbooks/ha-entry.yml                                    # 单阶段
+ansible-playbook playbooks/ha-entry.yml --tags haproxy                     # 单步骤
+ansible-playbook playbooks/ha-entry.yml --tags verify                      # 只做验证
+ansible-playbook playbooks/ha-entry.yml --limit k8s-master01               # 单台主机
+ansible-playbook playbooks/join-workers.yml --limit k8s-worker11,k8s-worker12  # worker 灰度
+ansible-playbook playbooks/kernel-pin.yml                                  # 固定内核（需 pin_kernel=true，会重启）
+ansible-playbook playbooks/verify.yml --tags failover                      # VIP 漂移演练（仅测试环境）
+ansible-playbook playbooks/reset.yml -e confirm_reset=yes                  # 重置（仅测试环境）
 ```
 
 ## 离线资源命令

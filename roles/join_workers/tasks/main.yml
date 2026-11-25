@@ -66,7 +66,7 @@
         msg: >-
           {{ node_name }} join 失败（输出已因含凭据被屏蔽）。
           排查：journalctl -u kubelet -e、crictl ps -a、master01 上 kubectl get nodes。
-          修复后重跑 70-join-workers.yml（幂等，已加入节点自动跳过）。
+          修复后重跑 join-workers.yml（幂等，已加入节点自动跳过）。
 
 # ---- 批次门禁：本批所有 worker Ready + calico-node Running，才放行下一批 ----
 - name: 等待本节点 Ready

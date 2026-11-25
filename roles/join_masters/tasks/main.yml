@@ -5,7 +5,7 @@
 - name: 确认不是 master01
   ansible.builtin.assert:
     that: inventory_hostname != groups['masters'][0]
-    fail_msg: "join_masters 不应在 {{ groups['masters'][0] }} 上执行（用 50-init-master.yml）"
+    fail_msg: "join_masters 不应在 {{ groups['masters'][0] }} 上执行（用 init-master.yml）"
 
 - name: 是否已加入（kubelet.conf 存在即跳过 join）
   ansible.builtin.stat:
@@ -68,7 +68,7 @@
         msg: >-
           {{ node_name }} join 失败（输出已因含凭据被屏蔽）。
           排查：journalctl -u kubelet -e 、crictl ps -a、master01 上 kubectl get pods -n kube-system。
-          修复后重跑 51-join-masters.yml（幂等，已完成节点自动跳过）。
+          修复后重跑 join-masters.yml（幂等，已完成节点自动跳过）。
 
 - name: root 的 kubeconfig（admin.conf 控制面节点同样存在）
   block:

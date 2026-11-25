@@ -40,7 +40,7 @@ Kubernetes 1.36.6 离线高可用集群 —— 讨论阶段结论汇总。
 
 | # | 决策项 | 结论 |
 |---|---|---|
-| 27 | 部署自动化 | 手册全部章节以 Ansible 落地：一阶段一 playbook（00–99），阶段末验证不过不进下一阶段；幂等（二次运行 changed=0）为验收标准；11（内核固定）与 99（重置）不进 site.yml，单独有意识执行 |
+| 27 | 部署自动化 | 手册全部章节以 Ansible 落地：一阶段一 playbook（playbooks/ 语义化命名，不带序号），阶段末验证不过不进下一阶段；幂等（二次运行 changed=0）为验收标准；kernel-pin（内核固定）与 reset（重置）不进 site.yml，单独有意识执行 |
 | 28 | kubectl/helm 调用方式 | 一律 `command` 直调 CLI，不用 `kubernetes.core` 模块：被管节点零 Python 依赖、行为与手册一致、排障直观；稳定后再评估替换 |
 | 29 | 变量落位 | `k8s-deploy.env` → `group_vars/all/main.yml`；`k8s-secrets.env` → `group_vars/all/vault.yml`（必须放 `all/` 目录内才自动加载，ansible-vault 加密）；`node.env` → `host_vars/<节点>.yml`；`node_ip` 显式写入 host_vars，禁用 `ansible_default_ipv4`（默认路由在外网网卡）；组件版本只认 `config/versions.yml`，playbook 经 `vars_files` 引入 |
 | 30 | 手册修订点 | 实施时按方案第 5 节 15 条修订执行（外网 frontend 白名单、certSANs 加外网 VIP、socat 随 HAProxy 安装、certs.d/hosts.toml 补齐、etcd 块归位、污点用默认、网段变量化、criSocket /run、检查脚本模板渲染、STATS_AUTH 拆分、443 监听、master join 闸门不要求 Ready、advert_int 统一 1、镜像预检前置、apt 候选预检） |
