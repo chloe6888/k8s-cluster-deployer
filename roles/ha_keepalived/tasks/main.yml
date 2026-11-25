@@ -1,13 +1,13 @@
 ---
 # 阶段 20 中段：keepalived 按 master01→02→03 逐台启动（playbook serial:1 控制）。
-- name: "Start and enable keepalived"  # 手册 3.5
+- name: Start and enable keepalived  # 手册 3.5
   ansible.builtin.systemd:
     name: keepalived
     state: started
     enabled: true
   tags: [ha, keepalived]
 
-- name: "Wait for both VIPs on master01 before starting the next node"  # 手册 3.5
+- name: Wait for both VIPs on master01 before starting the next node  # 手册 3.5
   when: inventory_hostname == groups['masters'][0]
   ansible.builtin.command:
     cmd: ip -4 addr show
@@ -20,7 +20,7 @@
   delay: 3
   tags: [ha, keepalived]
 
-- name: "Confirm keepalived is running on master02/03"  # 手册 3.5；VIP 应仍在 master01
+- name: Confirm keepalived is running on master02/03  # 手册 3.5；VIP 应仍在 master01
   when: inventory_hostname != groups['masters'][0]
   ansible.builtin.command:
     cmd: systemctl is-active keepalived

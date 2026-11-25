@@ -2,12 +2,12 @@
 # 阶段 10：系统基线（手册第 2 章，除 2.5 内核固定外）。全部节点并行。
 # 幂等要求：第二次运行 changed=0。
 
-- name: "Set the hostname"  # 手册 2.1
+- name: Set the hostname  # 手册 2.1
   ansible.builtin.hostname:
     name: "{{ node_name }}"
   tags: [os, hostname]
 
-- name: "Write the managed /etc/hosts block (all nodes, internal IP, node name)"  # 手册 2.1
+- name: Write the managed /etc/hosts block (all nodes, internal IP, node name)  # 手册 2.1
   ansible.builtin.blockinfile:
     path: /etc/hosts
     marker: "# {mark} k8s-cluster-deployer managed"
@@ -19,7 +19,7 @@
          | map('join', ' ') | join('\n') }}
   tags: [os, hostname]
 
-- name: "Verify Harbor hostname resolution"  # 手册 2.1
+- name: Verify Harbor hostname resolution  # 手册 2.1
   ansible.builtin.command:
     cmd: "getent hosts {{ harbor.split(':')[0] }}"
   changed_when: false
@@ -27,7 +27,7 @@
   register: harbor_check
   tags: [os, hostname, verify]
 
-- name: "Persist the k8s.conf module list (overlay / br_netfilter / ipip)"  # 手册 2.2
+- name: Persist the k8s.conf module list (overlay / br_netfilter / ipip)  # 手册 2.2
   ansible.builtin.copy:
     dest: /etc/modules-load.d/k8s.conf
     mode: "0644"
@@ -38,7 +38,7 @@
   notify: Reload kernel modules
   tags: [os, modules]
 
-- name: "Persist the nftables.conf module list (nf_tables / nf_nat / nf_conntrack)"  # 手册 2.3
+- name: Persist the nftables.conf module list (nf_tables / nf_nat / nf_conntrack)  # 手册 2.3
   ansible.builtin.copy:
     dest: /etc/modules-load.d/nftables.conf
     mode: "0644"
@@ -49,14 +49,14 @@
   notify: Reload kernel modules
   tags: [os, modules]
 
-- name: "Load kernel modules immediately"  # 手册 2.2/2.3
+- name: Load kernel modules immediately  # 手册 2.2/2.3
   community.general.modprobe:
     name: "{{ item }}"
     state: present
   loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
   tags: [os, modules]
 
-- name: "Write the nine sysctl parameters"  # 手册 2.2；rp_filter 显式写入防基线改回
+- name: Write the nine sysctl parameters  # 手册 2.2；rp_filter 显式写入防基线改回
   ansible.builtin.template:
     src: k8s-sysctl.conf.j2
     dest: /etc/sysctl.d/k8s.conf
@@ -64,36 +64,36 @@
   register: os_sysctl_file
   tags: [os, sysctl]
 
-- name: "Apply sysctl via sysctl --system"  # 手册 2.2
+- name: Apply sysctl via sysctl --system  # 手册 2.2
   ansible.builtin.command:
     cmd: sysctl --system
   when: os_sysctl_file is changed
   changed_when: false
   tags: [os, sysctl]
 
-- name: "Install the nftables CLI tools"  # 手册 2.3
+- name: Install the nftables CLI tools  # 手册 2.3
   ansible.builtin.apt:
     name: nftables
     state: present
     update_cache: false
   tags: [os, nftables]
 
-- name: "Disable nftables service autostart"  # 手册 2.3
+- name: Disable nftables service autostart  # 手册 2.3
   ansible.builtin.systemd:
     name: nftables
     enabled: false
   tags: [os, nftables]
 
-- name: "Mask the nftables service"  # 手册 2.3
+- name: Mask the nftables service  # 手册 2.3
   ansible.builtin.systemd:
     name: nftables
     masked: true
   tags: [os, nftables]
 
-- name: "Optionally stop the idle nftables service on fresh nodes"  # 手册 2.3；默认不做
+- name: Optionally stop the idle nftables service on fresh nodes  # 手册 2.3；默认不做
   when: nftables_stop_if_idle | bool
   block:
-    - name: "Read nftables service state and ruleset"
+    - name: Read nftables service state and ruleset
       ansible.builtin.command:
         cmd: "{{ item }}"
       loop:
@@ -102,7 +102,7 @@
       register: nft_idle_probe
       changed_when: false
 
-    - name: "Stop only when not clustered, ruleset empty, and service active"
+    - name: Stop only when not clustered, ruleset empty, and service active
       ansible.builtin.systemd:
         name: nftables
         state: stopped
@@ -112,34 +112,34 @@
         - nft_idle_probe.results[1].stdout | trim == ''
   tags: [os, nftables]
 
-- name: "Check swap status"  # 手册 2.4
+- name: Check swap status  # 手册 2.4
   ansible.builtin.command:
     cmd: swapon --show
   register: os_swapon
   changed_when: false
   tags: [os, swap]
 
-- name: "Disable swap"  # 手册 2.4
+- name: Disable swap  # 手册 2.4
   ansible.builtin.command:
     cmd: swapoff -a
   when: os_swapon.stdout | trim != ''
   changed_when: os_swapon.stdout | trim != ''
   tags: [os, swap]
 
-- name: "Comment out /swap.img in /etc/fstab"  # 手册 2.4
+- name: Comment out /swap.img in /etc/fstab  # 手册 2.4
   ansible.builtin.replace:
     path: /etc/fstab
     regexp: '(?<!#)^\s*(/swap\.img\s)'
     replace: '#\1'
   tags: [os, swap]
 
-- name: "Check systemd-resolved upstream files"  # 手册 2.6
+- name: Check systemd-resolved upstream files  # 手册 2.6
   ansible.builtin.stat:
     path: /run/systemd/resolve/resolv.conf
   register: os_resolv_conf
   tags: [os, dns]
 
-- name: "Install and start systemd-resolved when missing"  # 手册 2.6
+- name: Install and start systemd-resolved when missing  # 手册 2.6
   when: not os_resolv_conf.stat.exists
   ansible.builtin.apt:
     name: systemd-resolved
@@ -147,13 +147,13 @@
   notify: Restart systemd-resolved
   tags: [os, dns]
 
-- name: "Install chrony (timesyncd removal is expected)"  # 手册 2.7
+- name: Install chrony (timesyncd removal is expected)  # 手册 2.7
   ansible.builtin.apt:
     name: chrony
     state: present
   tags: [os, chrony]
 
-- name: "Write the chrony configuration (server lines only)"  # 手册 2.7
+- name: Write the chrony configuration (server lines only)  # 手册 2.7
   ansible.builtin.template:
     src: chrony.conf.j2
     dest: /etc/chrony/chrony.conf
@@ -161,7 +161,7 @@
   notify: Restart chrony
   tags: [os, chrony]
 
-- name: "Write the journald size limit"  # 手册 2.8
+- name: Write the journald size limit  # 手册 2.8
   ansible.builtin.template:
     src: journald.conf.j2
     dest: /etc/systemd/journald.conf.d/10-k8s-node.conf
@@ -169,10 +169,10 @@
   notify: Restart journald
   tags: [os, journald]
 
-- name: "Flush handlers before verification"
+- name: Flush handlers before verification
   ansible.builtin.meta: flush_handlers
 
-- name: "Enable chrony on boot"  # 手册 2.7
+- name: Enable chrony on boot  # 手册 2.7
   ansible.builtin.systemd:
     name: chrony
     enabled: true
@@ -180,7 +180,7 @@
   tags: [os, chrony]
 
 # ---- 验证 ----
-- name: "Read current sysctl values"  # gather 发生在应用 sysctl 之前，故不用 facts
+- name: Read current sysctl values  # gather 发生在应用 sysctl 之前，故不用 facts
   ansible.builtin.command:
     cmd: "sysctl -n {{ item.key }}"
   loop: "{{ sysctl_expect | dict2items }}"
@@ -199,7 +199,7 @@
       fs.inotify.max_queued_events: "65536"
   tags: [os, sysctl, verify]
 
-- name: "Verify the nine sysctl values match the manual"
+- name: Verify the nine sysctl values match the manual
   ansible.builtin.assert:
     that: "{{ sysctl_expect | dict2items | map(attribute='value') | list }}"
     quiet: true
@@ -216,7 +216,7 @@
       fs.inotify.max_queued_events: "{{ os_sysctl_read.results[8].stdout | trim == '65536' }}"
   tags: [os, sysctl, verify]
 
-- name: "Verify swap is disabled"
+- name: Verify swap is disabled
   ansible.builtin.command:
     cmd: swapon --show
   register: os_swapon_after
@@ -224,7 +224,7 @@
   failed_when: os_swapon_after.stdout | trim != ''
   tags: [os, swap, verify]
 
-- name: "Verify nftables is masked"
+- name: Verify nftables is masked
   ansible.builtin.command:
     cmd: systemctl show -p UnitFileState nftables
   register: os_nft_state
@@ -232,7 +232,7 @@
   failed_when: os_nft_state.stdout != 'UnitFileState=masked'
   tags: [os, nftables, verify]
 
-- name: "Verify chrony has at least one usable source"  # 初次同步最多等 2 分钟
+- name: Verify chrony has at least one usable source  # 初次同步最多等 2 分钟
   ansible.builtin.command:
     cmd: chronyc sources
   register: os_chrony_sources

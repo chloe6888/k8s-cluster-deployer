@@ -3,7 +3,7 @@
 # 手册 9.2 连通性与 VIP 漂移演练打 never 标签：
 #   ansible-playbook playbooks/verify.yml --tags connectivity
 #   ansible-playbook playbooks/verify.yml --tags failover
-- name: "Post-deployment verification"
+- name: Post-deployment verification
   hosts: k8s_all
   gather_facts: true
   vars_files: ../config/versions.yml

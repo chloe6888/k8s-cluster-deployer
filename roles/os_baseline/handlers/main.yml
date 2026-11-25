@@ -1,22 +1,22 @@
 ---
-- name: "Reload kernel modules"
+- name: Reload kernel modules
   community.general.modprobe:
     name: "{{ item }}"
     state: present
   loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
 
-- name: "Restart systemd-resolved"
+- name: Restart systemd-resolved
   ansible.builtin.systemd:
     name: systemd-resolved
     state: restarted
     enabled: true
 
-- name: "Restart chrony"
+- name: Restart chrony
   ansible.builtin.systemd:
     name: chrony
     state: restarted
 
-- name: "Restart journald"
+- name: Restart journald
   ansible.builtin.systemd:
     name: systemd-journald
     state: restarted

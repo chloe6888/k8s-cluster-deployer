@@ -1,18 +1,18 @@
 ---
 # 阶段 80：MetalLB 0.15.3 L2（手册第 7 章，只跑在 master01）。
 # speaker 需特权：命名空间放行 Pod Security Admission。
-- name: "Assert this runs on master01"
+- name: Assert this runs on master01
   ansible.builtin.assert:
     that: inventory_hostname == groups['masters'][0]
 
-- name: "Fetch the MetalLB chart (verified on fetch)"  # 手册 7.2
+- name: Fetch the MetalLB chart (verified on fetch)  # 手册 7.2
   ansible.builtin.include_role:
     name: artifact
   vars:
     artifact_file: "metallb-{{ metallb_version }}.tgz"
   tags: [lb]
 
-- name: "Render metallb-values.yaml (offline image overrides)"  # 手册 7.1
+- name: Render metallb-values.yaml (offline image overrides)  # 手册 7.1
   ansible.builtin.template:
     src: metallb-values.yaml.j2
     dest: "{{ package_dir }}/charts/metallb-values.yaml"
@@ -33,7 +33,7 @@
     or (lb_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
   tags: [lb]
 
-- name: "Create the metallb-system namespace"  # 手册 7.2
+- name: Create the metallb-system namespace  # 手册 7.2
   ansible.builtin.shell: >-
     kubectl create namespace metallb-system --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -42,7 +42,7 @@
   changed_when: "'created' in lb_ns.stdout"
   tags: [lb]
 
-- name: "Allow Pod Security Admission for the privileged speaker"  # 手册 7.2
+- name: Allow Pod Security Admission for the privileged speaker  # 手册 7.2
   ansible.builtin.command:
     cmd: >-
       kubectl label namespace metallb-system
@@ -52,7 +52,7 @@
   changed_when: false
   tags: [lb]
 
-- name: "Run helm upgrade --install metallb"  # 手册 7.2
+- name: Run helm upgrade --install metallb  # 手册 7.2
   ansible.builtin.command:
     cmd: >-
       helm upgrade --install metallb {{ package_dir }}/charts/metallb-{{ metallb_version }}.tgz
@@ -61,27 +61,27 @@
   changed_when: "'has been upgraded' in lb_install.stdout or 'deployed' in lb_install.stdout"
   tags: [lb]
 
-- name: "Wait for metallb-controller to be ready"  # 手册 7.2
+- name: Wait for metallb-controller to be ready  # 手册 7.2
   ansible.builtin.command:
     cmd: kubectl -n metallb-system rollout status deployment/metallb-controller --timeout=5m
   changed_when: false
   tags: [lb, verify]
 
-- name: "Wait for metallb-speaker to be ready"  # 手册 7.2
+- name: Wait for metallb-speaker to be ready  # 手册 7.2
   ansible.builtin.command:
     cmd: kubectl -n metallb-system rollout status daemonset/metallb-speaker --timeout=5m
   changed_when: false
   tags: [lb, verify]
 
 # ---- 7.3 外网地址池（webhook 未就绪会报错，自动重试）----
-- name: "Render the address pool and L2 advertisement"  # 手册 7.3
+- name: Render the address pool and L2 advertisement  # 手册 7.3
   ansible.builtin.template:
     src: metallb-pool.yaml.j2
     dest: "{{ package_dir }}/charts/metallb-pool.yaml"
     mode: "0644"
   tags: [lb]
 
-- name: "Apply the address pool (retries while the webhook warms up)"  # 手册 7.3
+- name: Apply the address pool (retries while the webhook warms up)  # 手册 7.3
   ansible.builtin.command:
     cmd: kubectl apply -f {{ package_dir }}/charts/metallb-pool.yaml
   register: lb_pool_apply
@@ -91,7 +91,7 @@
   delay: 10
   tags: [lb]
 
-- name: "Verify pool-ext and l2-ext exist"  # 手册 7.3
+- name: Verify pool-ext and l2-ext exist  # 手册 7.3
   ansible.builtin.command:
     cmd: kubectl -n metallb-system get ipaddresspool,l2advertisement
   register: lb_pool

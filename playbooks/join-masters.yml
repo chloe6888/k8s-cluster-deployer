@@ -1,6 +1,6 @@
 ---
 # 阶段 51：master02/03 加入控制面（手册 5.5；serial:1 逐台）。
-- name: "Join the remaining masters"
+- name: Join the remaining masters
   hosts: masters:!first_master
   gather_facts: true
   serial: 1
