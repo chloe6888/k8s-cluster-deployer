@@ -2,28 +2,28 @@
 # 阶段 51：master02/03 加入控制面（手册 5.5；serial:1 逐台执行）。
 # 每台节点使用独立新生成的 token 与 certificate-key（均在 master01 现场生成，no_log）。
 # 门禁 = 该节点 4 个 static pod Running + etcd 成员数/健康；不要求节点 Ready（CNI 未装）。
-- name: 确认不是 master01
+- name: "Assert this is not master01"
   ansible.builtin.assert:
     that: inventory_hostname != groups['masters'][0]
     fail_msg: "join_masters 不应在 {{ groups['masters'][0] }} 上执行（用 init-master.yml）"
 
-- name: 是否已加入（kubelet.conf 存在即跳过 join）
+- name: "Skip when already joined (kubelet.conf exists)"
   ansible.builtin.stat:
     path: /etc/kubernetes/kubelet.conf
   register: jm_joined
 
-- name: 加入控制面
+- name: "Join the control plane"
   when: not jm_joined.stat.exists
   block:
     # ---- 在 master01 现场生成本节点专用凭据 ----
-    - name: 生成新的 bootstrap token（默认 1h 有效）
+    - name: "Create a fresh bootstrap token (1h TTL)"
       ansible.builtin.command: kubeadm token create
       delegate_to: "{{ groups['masters'][0] }}"
       register: jm_token
       no_log: true
       changed_when: false
 
-    - name: 计算 CA 公钥哈希（discovery-token-ca-cert-hash）
+    - name: "Compute the CA public key hash (discovery-token-ca-cert-hash)"
       ansible.builtin.shell: >-
         openssl x509 -in /etc/kubernetes/pki/ca.crt -pubkey -noout
         | openssl rsa -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}'
@@ -31,7 +31,7 @@
       register: jm_ca_hash
       changed_when: false
 
-    - name: 重新上传控制面证书并取新 certificate-key（输出即密钥，no_log）
+    - name: "Re-upload control-plane certificates and get a fresh certificate-key"  # no_log
       ansible.builtin.command:
         cmd: kubeadm init phase upload-certs --upload-certs
       delegate_to: "{{ groups['masters'][0] }}"
@@ -39,46 +39,46 @@
       no_log: true
       changed_when: false
 
-    - name: 渲染本节点 join 配置
+    - name: "Render this node's join configuration"
       ansible.builtin.template:
         src: kubeadm-join-controlplane.yml.j2
         dest: /etc/kubeadm/kubeadm-join-controlplane.yml
         mode: "0600"
       no_log: true
 
-    - name: kubeadm join --control-plane（含凭据，no_log；失败看 journalctl -u kubelet）
+    - name: "Run kubeadm join --control-plane (no_log)"  # 失败看 journalctl -u kubelet
       ansible.builtin.command:
         cmd: kubeadm join --config /etc/kubeadm/kubeadm-join-controlplane.yml
       args:
         creates: /etc/kubernetes/kubelet.conf
       no_log: true
 
-    - name: 加入完成
+    - name: "Report join completion"
       ansible.builtin.debug:
         msg: "{{ node_name }} 已作为控制面节点加入（advertise {{ node_ip }}:6443）"
 
-    - name: 清理含密钥的 join 配置
+    - name: "Remove the join configuration containing the key"
       ansible.builtin.file:
         path: /etc/kubeadm/kubeadm-join-controlplane.yml
         state: absent
 
   rescue:
-    - name: join 失败处置指引
+    - name: "Advise on join failure"
       ansible.builtin.fail:
         msg: >-
           {{ node_name }} join 失败（输出已因含凭据被屏蔽）。
           排查：journalctl -u kubelet -e 、crictl ps -a、master01 上 kubectl get pods -n kube-system。
           修复后重跑 join-masters.yml（幂等，已完成节点自动跳过）。
 
-- name: root 的 kubeconfig（admin.conf 控制面节点同样存在）
+- name: "Prepare the root kubeconfig (control-plane nodes also have admin.conf)"
   block:
-    - name: /root/.kube 目录
+    - name: "Create /root/.kube"
       ansible.builtin.file:
         path: /root/.kube
         state: directory
         mode: "0700"
 
-    - name: admin.conf → /root/.kube/config
+    - name: "Install admin.conf as /root/.kube/config"
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: /root/.kube/config
@@ -86,7 +86,7 @@
         remote_src: true
 
 # ---- 门禁：4 个 static pod Running + etcd 成员数与健康（不要求节点 Ready）----
-- name: 等待本节点 4 个 static pod 全部 Running
+- name: "Wait for the four static pods to be Running"
   ansible.builtin.command:
     cmd: >-
       kubectl -n kube-system get pods --field-selector spec.nodeName={{ node_name }}
@@ -103,7 +103,7 @@
   delay: 10
   tags: [verify]
 
-- name: etcd 成员数应等于已加入 master 数（含 master01）
+- name: "Verify the etcd member count matches the joined masters"
   ansible.builtin.shell: >-
     crictl exec "$(crictl ps --name etcd -q | head -n1)"
     etcdctl --endpoints=https://127.0.0.1:2379
@@ -121,7 +121,7 @@
     != groups['masters'].index(inventory_hostname) + 1
   tags: [verify]
 
-- name: 本节点 etcd endpoint 健康
+- name: "Verify this node's etcd endpoint is healthy"
   ansible.builtin.shell: >-
     crictl exec "$(crictl ps --name etcd -q | head -n1)"
     etcdctl --endpoints=https://{{ node_ip }}:2379
@@ -137,14 +137,14 @@
   failed_when: jm_etcd_health.stdout is not search('is healthy[:] successfully')
   tags: [verify]
 
-- name: 展示节点状态（NotReady 属预期）
+- name: "Show node status (NotReady is expected)"
   ansible.builtin.command: kubectl get nodes -o wide
   delegate_to: "{{ groups['masters'][0] }}"
   register: jm_nodes
   changed_when: false
   tags: [verify]
 
-- name: 节点状态输出
+- name: "Print node status"
   ansible.builtin.debug:
     msg: "{{ jm_nodes.stdout_lines }}"
   tags: [verify]

@@ -1,13 +1,13 @@
 ---
 # 阶段 00 第一段：控制机侧变量预检（只读）。在 localhost 上执行。
-- name: 断言已用 -i 显式指定集群 inventory
+- name: "Assert a cluster inventory was given via -i"
   ansible.builtin.assert:
     that: groups['k8s_all'] | default([]) | length > 0
     fail_msg: >-
       未加载到任何集群节点（本工程 ansible.cfg 刻意不设默认 inventory）。
       请加 -i inventories/<集群>（cqjf / ms / msbc / test / example）重新执行，防止跑错集群。
 
-- name: 当前集群横幅（防跑错集群，执行前肉眼确认）
+- name: "Print the current-cluster banner"  # 防跑错集群
   ansible.builtin.debug:
     msg:
       - "══════════════════════════════════════════════════════════"
@@ -16,7 +16,7 @@
       - " 内网 {{ node_cidr }} VIP {{ vip }} │ 外网 VIP {{ ext_vip }} │ VRID {{ ka_vrid }}/{{ ka_ext_vrid }}"
       - "══════════════════════════════════════════════════════════"
 
-- name: 组装 masters / nodes 数据（从 inventory hostvars 提取）
+- name: "Assemble masters and nodes data from inventory hostvars"
   ansible.builtin.set_fact:
     preflight_payload:
       cluster_prefix: "{{ cluster_prefix }}"
@@ -61,7 +61,7 @@
         {%- endfor -%}
         {{ out }}
 
-- name: 变量取值预检（Python 标准库脚本，任何一项失败即中止）
+- name: "Run variable validation (any failure aborts)"
   ansible.builtin.script: check_vars.py
   args:
     executable: /usr/bin/env python3

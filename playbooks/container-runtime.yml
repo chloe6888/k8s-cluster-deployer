@@ -1,6 +1,6 @@
 ---
 # 阶段 30：容器运行时（手册第 4 章 + 修订 4/14）。全部节点并行。
-- name: 容器运行时与镜像预检
+- name: "Container runtime and image preflight"
   hosts: k8s_all
   gather_facts: true
   vars_files: ../config/versions.yml

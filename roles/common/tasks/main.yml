@@ -1,10 +1,10 @@
 ---
 # 公共事实：node_name 由 cluster_prefix + 主机名拼出（与手册 ${CLUSTER_PREFIX}-k8s-master0N 一致）
-- name: 计算节点名
+- name: "Compute the node name"
   ansible.builtin.set_fact:
     node_name: "{{ cluster_prefix }}-{{ inventory_hostname }}"
 
-- name: 断言节点变量已显式写入 host_vars
+- name: "Assert node vars are explicitly set in host_vars"
   ansible.builtin.assert:
     that:
       - node_ip is defined and node_ip != ''

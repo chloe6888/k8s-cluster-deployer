@@ -1,14 +1,14 @@
 ---
-- name: daemon-reload
+- name: "Reload systemd"
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: 重启 haproxy
+- name: "Restart haproxy"
   ansible.builtin.systemd:
     name: haproxy
     state: restarted
 
-- name: 重启 keepalived（仅已启动时）
+- name: "Restart keepalived (only when running)"
   ansible.builtin.systemd:
     name: keepalived
     state: restarted

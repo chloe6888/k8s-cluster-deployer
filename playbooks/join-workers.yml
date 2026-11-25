@@ -1,6 +1,6 @@
 ---
 # 阶段 70：worker 分批加入（手册 5.9；serial: worker_batch_size，批内全部 Ready 才放行下一批）。
-- name: 分批加入 worker
+- name: "Join workers in batches"
   hosts: workers
   gather_facts: true
   serial: "{{ worker_batch_size | default(10) }}"

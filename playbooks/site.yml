@@ -3,27 +3,27 @@
 #   ansible-playbook playbooks/site.yml                          # 全流程
 #   ansible-playbook playbooks/site.yml --tags cni               # 只跑某阶段
 # 逐阶段：见 README「执行方式」表。
-- name: "预检"
+- name: "Preflight"
   import_playbook: preflight.yml
-- name: "操作系统基线"
+- name: "OS baseline"
   import_playbook: os-baseline.yml
-- name: "高可用入口"
+- name: "HA entry"
   import_playbook: ha-entry.yml
-- name: "容器运行时"
+- name: "Container runtime"
   import_playbook: container-runtime.yml
-- name: "K8s 软件包"
+- name: "K8s packages"
   import_playbook: k8s-packages.yml
-- name: "初始化 master01"
+- name: "Initialize master01"
   import_playbook: init-master.yml
-- name: "加入其余 master"
+- name: "Join the remaining masters"
   import_playbook: join-masters.yml
 - name: "Calico"
   import_playbook: calico.yml
-- name: "分批加入 worker"
+- name: "Join workers in batches"
   import_playbook: join-workers.yml
 - name: "MetalLB"
   import_playbook: metallb.yml
 - name: "Envoy Gateway"
   import_playbook: envoy-gateway.yml
-- name: "部署后验收"
+- name: "Post-deployment verification"
   import_playbook: verify.yml

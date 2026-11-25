@@ -1,11 +1,11 @@
 ---
 # 阶段 60：Calico 3.32.2 两件套 Chart（手册第 6 章，只跑在 master01）。
 # CRD 必须 server-side apply（客户端 apply 超 last-applied 注解上限）。
-- name: 确认在 master01 执行
+- name: "Assert this runs on master01"
   ansible.builtin.assert:
     that: inventory_hostname == groups['masters'][0]
 
-- name: 建立 charts 目录
+- name: "Create the charts directory"
   ansible.builtin.file:
     path: "{{ package_dir }}/charts"
     state: directory
@@ -13,7 +13,7 @@
   tags: [cni]
 
 # ---- 6.2/6.3 获取两个 Chart（获取即校验 SHA256SUMS）----
-- name: "6.2 获取 tigera-operator 与 CRD Chart"
+- name: "Fetch the tigera-operator and CRD charts"  # 手册 6.2
   ansible.builtin.include_role:
     name: artifact
   vars:
@@ -23,7 +23,7 @@
   tags: [cni]
 
 # ---- 6.4 安装前预检：calico/node 镜像内 nft 必须可用（v3.32.0 曾在此崩溃）----
-- name: "6.4 nft 预检（强制；rc!=0 则 calico-node 会反复崩溃，立即停止）"
+- name: "Run the mandatory nft preflight (rc!=0 aborts)"  # 手册 6.4；否则 calico-node 反复崩溃
   ansible.builtin.command:
     cmd: >-
       nerdctl -n k8s.io run --rm --privileged --net=host --entrypoint nft
@@ -34,7 +34,7 @@
   tags: [cni]
 
 # ---- 6.3 CRD Chart：server-side apply ----
-- name: "6.3 渲染 CRD Chart 并 server-side apply"
+- name: "Render the CRD chart and apply server-side"  # 手册 6.3
   ansible.builtin.shell: >-
     helm template calico-crds {{ package_dir }}/charts/crd.projectcalico.org.v1-v{{ calico_version }}.tgz
     | kubectl apply --server-side -f -
@@ -44,7 +44,7 @@
   changed_when: "'created' in calico_crd_apply.stdout or 'configured' in calico_crd_apply.stdout"
   tags: [cni]
 
-- name: "6.3 建立 tigera-operator 命名空间"
+- name: "Create the tigera-operator namespace"  # 手册 6.3
   ansible.builtin.shell: >-
     kubectl create namespace tigera-operator --dry-run=client -o yaml | kubectl apply -f -
   args:
@@ -54,14 +54,14 @@
   tags: [cni]
 
 # ---- 6.4 values（模板渲染，唯一事实源在 group_vars + versions.yml）----
-- name: "6.4 渲染 calico-values.yaml"
+- name: "Render calico-values.yaml"  # 手册 6.4
   ansible.builtin.template:
     src: calico-values.yaml.j2
     dest: "{{ package_dir }}/charts/calico-values.yaml"
     mode: "0644"
   tags: [cni]
 
-- name: "6.4 核对渲染结果镜像全部指向内网（强制）：{{ registry }}"
+- name: "Verify all rendered images point at {{ registry }}"  # 手册 6.4
   ansible.builtin.shell: >-
     helm template calico {{ package_dir }}/charts/tigera-operator-v{{ calico_version }}.tgz
     -n tigera-operator -f {{ package_dir }}/charts/calico-values.yaml
@@ -76,7 +76,7 @@
   tags: [cni]
 
 # ---- 6.5 安装 Operator ----
-- name: "6.5 helm upgrade --install calico"
+- name: "Run helm upgrade --install calico"  # 手册 6.5
   ansible.builtin.command:
     cmd: >-
       helm upgrade --install calico {{ package_dir }}/charts/tigera-operator-v{{ calico_version }}.tgz
@@ -85,25 +85,25 @@
   changed_when: "'has been upgraded' in calico_install.stdout or 'deployed' in calico_install.stdout"
   tags: [cni]
 
-- name: "6.5 等待 tigera-operator 就绪"
+- name: "Wait for tigera-operator to be ready"  # 手册 6.5
   ansible.builtin.command:
     cmd: kubectl -n tigera-operator rollout status deployment/tigera-operator --timeout=5m
   changed_when: false
   tags: [cni, verify]
 
-- name: 等待 TigerStatus Ready（Calico 数据面全组件健康）
+- name: "Wait for TigerStatus Ready (all data-plane components healthy)"
   ansible.builtin.command:
     cmd: kubectl wait --for=condition=Ready tigerstatus/default --timeout=10m
   changed_when: false
   tags: [cni, verify]
 
-- name: 等待全部节点 Ready（calico-node 逐台就绪）
+- name: "Wait for every node to be Ready (calico-node per node)"
   ansible.builtin.command:
     cmd: kubectl wait --for=condition=Ready nodes --all --timeout=10m
   changed_when: false
   tags: [cni, verify]
 
-- name: 展示节点与 calico-node 状态
+- name: "Show node and calico-node status"
   ansible.builtin.shell: >-
     kubectl get nodes -o wide;
     kubectl -n kube-system get pods -l k8s-app=calico-node -o wide
@@ -113,7 +113,7 @@
   changed_when: false
   tags: [cni, verify]
 
-- name: 状态输出
+- name: "Print status"
   ansible.builtin.debug:
     msg: "{{ calico_status.stdout_lines }}"
   tags: [cni, verify]

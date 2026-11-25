@@ -1,5 +1,5 @@
 ---
-- name: 更新 grub
+- name: "Update grub"
   ansible.builtin.command:
     cmd: update-grub
   changed_when: false

@@ -1,7 +1,7 @@
 ---
 # 阶段 20：高可用入口（手册 3.1–3.6 + 3.8/3.9 启动次序）。
 # 三段：并行装配置 → serial:1 按序拉起（master01 先持 VIP）→ 汇总验证。
-- name: ① HAProxy / keepalived 安装与配置（masters 并行）
+- name: "Install and configure HAProxy and keepalived (masters in parallel)"
   hosts: masters
   gather_facts: true
   vars_files: ../config/versions.yml
@@ -10,7 +10,7 @@
     - ha_entry
   tags: [ha]
 
-- name: ② 按优先级串行拉起（master01 先持有两个 VIP）
+- name: "Bring up serially by priority (master01 holds both VIPs first)"
   hosts: masters
   gather_facts: false
   serial: 1
@@ -19,12 +19,12 @@
     - ha_keepalived
   tags: [ha]
 
-- name: ③ 双 VIP 汇总验证（master01 单点检查）
+- name: "Verify both VIPs from master01 (single-point check)"
   hosts: first_master
   gather_facts: false
   vars_files: ../config/versions.yml
   tasks:
-    - name: master01 必须同时持有内网与外网 VIP
+    - name: "Assert master01 holds both the internal and external VIPs"
       ansible.builtin.command:
         cmd: "ip -4 addr show"
       register: ha_final_vips
@@ -33,7 +33,7 @@
         ha_final_vips.stdout is not search((vip | regex_escape) ~ '/')
         or ha_final_vips.stdout is not search((ext_vip | regex_escape) ~ '/')
 
-    - name: 经内网 VIP 探活 apiserver（后端尚未起，仅验证 HAProxy 端口在听）
+    - name: "Probe apiserver via the internal VIP (only checks the HAProxy port)"
       ansible.builtin.shell: "timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo port-ok"
       args:
         executable: /bin/bash
@@ -41,7 +41,7 @@
       changed_when: false
       failed_when: ha_final_port.stdout | trim != 'port-ok'
 
-    - name: VIP 归属与端口输出
+    - name: "Print VIP ownership and listening ports"
       ansible.builtin.debug:
         msg:
           - "两个 VIP 均在 {{ node_name }}：通过"

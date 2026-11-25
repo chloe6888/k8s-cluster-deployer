@@ -16,6 +16,7 @@ apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
 clusterName: kubernetes
 kubernetesVersion: v{{ kubernetes_version }}
+imageRepository: {{ registry }}            # 离线必备：kubeadm images pull 与静态 Pod 镜像引用都取自此
 controlPlaneEndpoint: {{ vip }}:{{ vip_port }}         # HAProxy 前置 VIP（内外独立漂移）
 # 修订 5：证书 SAN 变量化 —— VIP、外网 VIP、各 master 内网 IP 与节点名
 apiServer:

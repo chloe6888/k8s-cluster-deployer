@@ -1,9 +1,9 @@
 ---
 # 预检（先变量后节点，变量错不碰任何节点）。
-- name: "变量预检（控制器本地，不连节点）"
+- name: "Variable preflight (controller only, no nodes)"
   import_playbook: preflight-vars.yml
 
-- name: "节点预检"
+- name: "Node preflight"
   hosts: k8s_all
   gather_facts: true
   any_errors_fatal: true

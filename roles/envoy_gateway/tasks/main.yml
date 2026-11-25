@@ -1,18 +1,18 @@
 ---
 # 阶段 81：Envoy Gateway 1.7.1（手册第 8 章，只跑在 master01；修订 9：Gateway 监听 443）。
 # 证书走 vault → /dev/shm 临时文件 → Secret，用后必删（always）。
-- name: 确认在 master01 执行
+- name: "Assert this runs on master01"
   ansible.builtin.assert:
     that: inventory_hostname == groups['masters'][0]
 
-- name: "8.1 获取 Envoy Gateway Chart（获取即校验）"
+- name: "Fetch the Envoy Gateway chart (verified on fetch)"  # 手册 8.1
   ansible.builtin.include_role:
     name: artifact
   vars:
     artifact_file: "gateway-helm-v{{ envoy_gateway_version }}.tgz"
   tags: [gateway]
 
-- name: "8.1 渲染 values（global.imageRegistry 覆盖控制面与 certgen）"
+- name: "Render values (global.imageRegistry covers control plane and certgen)"  # 手册 8.1
   ansible.builtin.copy:
     dest: "{{ package_dir }}/charts/envoy-gateway-values.yaml"
     mode: "0644"
@@ -21,7 +21,7 @@
         imageRegistry: {{ registry }}
   tags: [gateway]
 
-- name: "8.1 核对渲染镜像全部指向 {{ registry }}"
+- name: "Verify all rendered images point at {{ registry }}"  # 手册 8.1
   ansible.builtin.shell: >-
     helm template eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz
     -n envoy-gateway-system -f {{ package_dir }}/charts/envoy-gateway-values.yaml
@@ -35,7 +35,7 @@
     or (gw_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
   tags: [gateway]
 
-- name: "8.2 helm upgrade --install eg（--create-namespace）"
+- name: "Run helm upgrade --install eg (--create-namespace)"  # 手册 8.2
   ansible.builtin.command:
     cmd: >-
       helm upgrade --install eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz
@@ -45,13 +45,13 @@
   changed_when: "'has been upgraded' in gw_install.stdout or 'deployed' in gw_install.stdout"
   tags: [gateway]
 
-- name: "8.2 等待 envoy-gateway 控制面就绪"
+- name: "Wait for the envoy-gateway control plane"  # 手册 8.2
   ansible.builtin.command:
     cmd: kubectl wait --timeout=5m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available
   changed_when: false
   tags: [gateway, verify]
 
-- name: "8.2 确认 Gateway API CRD 存在（缺失则 8.3 apply 失败）"
+- name: "Verify the Gateway API CRDs exist"  # 手册 8.2；缺失则 8.3 apply 失败
   ansible.builtin.command:
     cmd: kubectl get crd gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io
   register: gw_crd
@@ -60,21 +60,21 @@
   tags: [gateway]
 
 # ---- 8.3 EnvoyProxy + GatewayClass ----
-- name: "8.3 渲染并应用 EnvoyProxy / GatewayClass"
+- name: "Render EnvoyProxy and GatewayClass"  # 手册 8.3
   ansible.builtin.template:
     src: envoy-gatewayclass.yaml.j2
     dest: "{{ package_dir }}/charts/envoy-gatewayclass.yaml"
     mode: "0644"
   tags: [gateway]
 
-- name: "8.3 应用 EnvoyProxy / GatewayClass"
+- name: "Apply EnvoyProxy and GatewayClass"  # 手册 8.3
   ansible.builtin.command:
     cmd: kubectl apply -f {{ package_dir }}/charts/envoy-gatewayclass.yaml
   register: gw_gc_apply
   changed_when: "'created' in gw_gc_apply.stdout or 'configured' in gw_gc_apply.stdout"
   tags: [gateway]
 
-- name: "8.3 确认 GatewayClass eg 就绪"
+- name: "Verify the eg GatewayClass is ready"  # 手册 8.3
   ansible.builtin.command:
     cmd: kubectl get gatewayclass eg
   register: gw_gc
@@ -83,10 +83,10 @@
   tags: [gateway, verify]
 
 # ---- 8.4① TLS Secret（vault 证书 → /dev/shm，用后必删）----
-- name: "8.4① TLS Secret（gw_tls_cert 非空才启用 443）"
+- name: "TLS Secret (443 only when gw_tls_cert is set)"  # 手册 8.4①
   when: gw_tls_enabled | bool
   block:
-    - name: 证书与私钥落到 /dev/shm（tmpfs，不落盘）
+    - name: "Stage the cert and key in /dev/shm (tmpfs)"
       ansible.builtin.copy:
         dest: "{{ item.dest }}"
         content: "{{ item.content }}"
@@ -96,7 +96,7 @@
         - { dest: /dev/shm/gw-tls.crt, content: "{{ gw_tls_cert }}" }
         - { dest: /dev/shm/gw-tls.key, content: "{{ gw_tls_key }}" }
 
-    - name: 核对证书与私钥匹配（两条哈希应一致）与证书信息
+    - name: "Verify the cert and key match and show cert info"
       ansible.builtin.shell: >-
         set -e;
         openssl x509 -in /dev/shm/gw-tls.crt -noout -subject -enddate -ext subjectAltName;
@@ -106,7 +106,7 @@
         executable: /bin/bash
       changed_when: false
 
-    - name: 创建 / 更新 kubernetes.io/tls Secret
+    - name: "Create or update the kubernetes.io/tls Secret"
       ansible.builtin.shell: >-
         kubectl -n envoy-gateway-system create secret tls {{ gw_tls_secret }}
         --cert=/dev/shm/gw-tls.crt --key=/dev/shm/gw-tls.key
@@ -118,7 +118,7 @@
       changed_when: "'created' in gw_secret.stdout or 'configured' in gw_secret.stdout"
 
   always:
-    - name: 删除 /dev/shm 临时证书（必删）
+    - name: "Remove the temporary certs from /dev/shm (always)"
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -126,14 +126,14 @@
   tags: [gateway]
 
 # ---- 8.4② Gateway（80 常开；443 仅 TLS 启用时；修订 9）----
-- name: "8.4② 渲染并应用 Gateway"
+- name: "Render the Gateway"  # 手册 8.4②
   ansible.builtin.template:
     src: envoy-gateway.yaml.j2
     dest: "{{ package_dir }}/charts/envoy-gateway.yaml"
     mode: "0644"
   tags: [gateway]
 
-- name: "8.4② 应用 Gateway"
+- name: "Apply the Gateway"  # 手册 8.4②
   ansible.builtin.command:
     cmd: kubectl apply -f {{ package_dir }}/charts/envoy-gateway.yaml
   register: gw_apply
@@ -141,22 +141,22 @@
   tags: [gateway]
 
 # ---- 8.4③ 可选：80→443 跳转 ----
-- name: "8.4③ HTTP→HTTPS 301 跳转（gw_http_redirect=true 才创建）"
+- name: "HTTP to HTTPS 301 redirect (only when gw_http_redirect=true)"  # 手册 8.4③
   when: (gw_http_redirect | bool) and (gw_tls_enabled | bool)
   block:
-    - name: 渲染 http-redirect
+    - name: "Render http-redirect"
       ansible.builtin.template:
         src: http-redirect.yaml.j2
         dest: "{{ package_dir }}/charts/http-redirect.yaml"
         mode: "0644"
 
-    - name: 应用 http-redirect（会接管 80 上未匹配流量）
+    - name: "Apply http-redirect (takes over unmatched traffic on 80)"
       ansible.builtin.command:
         cmd: kubectl apply -f {{ package_dir }}/charts/http-redirect.yaml
       register: gw_redirect
       changed_when: "'created' in gw_redirect.stdout or 'configured' in gw_redirect.stdout"
 
-- name: "8.4③ 跳转未启用时删除遗留 http-to-https"
+- name: "Remove the leftover http-to-https when redirect is disabled"  # 手册 8.4③
   when: not ((gw_http_redirect | bool) and (gw_tls_enabled | bool))
   ansible.builtin.command:
     cmd: kubectl -n envoy-gateway-system delete httproute http-to-https --ignore-not-found
@@ -165,13 +165,13 @@
   tags: [gateway]
 
 # ---- 8.4④ 验证 ----
-- name: "8.4④ 等待 Gateway Programmed"
+- name: "Wait for the Gateway to be Programmed"  # 手册 8.4④
   ansible.builtin.command:
     cmd: kubectl -n envoy-gateway-system wait --for=condition=Programmed gateway/gw-ext --timeout=5m
   changed_when: false
   tags: [gateway, verify]
 
-- name: "8.4④ Envoy Service 应分到 {{ gw_ext_ip }}"
+- name: "Verify the Envoy Service got {{ gw_ext_ip }}"  # 手册 8.4④
   ansible.builtin.shell: >-
     kubectl get svc -n envoy-gateway-system -o json
     | grep -o '"loadBalancerIP": *"[^"]*"\|"ip": *"{{ gw_ext_ip }}"'
@@ -182,7 +182,7 @@
   failed_when: gw_svc_ip.stdout is not search(gw_ext_ip | regex_escape)
   tags: [gateway, verify]
 
-- name: "8.4④ 数据面镜像复核（envoy Deployment 各容器均指向 {{ registry }}）"
+- name: "Re-verify data-plane images (every envoy container points at {{ registry }})"  # 手册 8.4④
   ansible.builtin.shell: >-
     kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'
     | tr ' ' '\n' | sort -u

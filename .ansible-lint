@@ -2,14 +2,12 @@
 # 跳过与实施方案约定相悖的风格规则（见 docs/ansible-implementation.md「工程骨架与约定」）：
 # - command-instead-of-module：方案明确 kubectl/helm/systemctl 探测一律走 command，不用 kubernetes.core
 # - risky-shell-pipe：管道多为 grep/awk 组合，rc 语义由 failed_when 显式接管（部分管道故意不吃 pipefail）
-# - name[casing]：任务名以手册章节号开头（如 "5.1 安装…"），便于对照手册，不改首字母大写
 # - var-naming[no-role-prefix]：register 用角色缩写前缀（vf_/jm_/jw_/pkg_…），不强制全角色名前缀
 # - no-handler：两处"变更后才执行"的服务操作（首次安装即停、sysctl --system）依赖即时顺序，不能延迟到 play 末尾
 # - key-order[task]：纯排序风格
 skip_list:
   - command-instead-of-module
   - risky-shell-pipe
-  - name[casing]
   - var-naming[no-role-prefix]
   - no-handler
   - key-order[task]

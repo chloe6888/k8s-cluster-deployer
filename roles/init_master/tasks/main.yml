@@ -1,95 +1,95 @@
 ---
 # 阶段 50：master01 初始化（手册 5.4，修订 2/5/6/7/8 + 证书年限 87600h/175200h）。
 # 只在 first_master（k8s-master01）执行；CNI 未装前节点 NotReady 属预期。
-- name: 确认目标就是 masters[0]
+- name: "Assert the target is masters[0]"
   ansible.builtin.assert:
     that: inventory_hostname == groups['masters'][0]
     fail_msg: "init_master 只允许在 {{ groups['masters'][0] }} 上执行"
 
-- name: 建立 /etc/kubeadm
+- name: "Create /etc/kubeadm"
   ansible.builtin.file:
     path: /etc/kubeadm
     state: directory
     mode: "0755"
 
-- name: "安装 helm（阶段 60/80/81 在本机执行 helm）"
+- name: "Install helm on master01"  # 阶段 60/80/81 在本机执行 helm
   block:
-    - name: 获取 helm 压缩包（获取即校验）
+    - name: "Fetch the helm tarball (verified on fetch)"
       ansible.builtin.include_role:
         name: artifact
       vars:
         artifact_file: "helm-v{{ helm_version }}-linux-amd64.tar.gz"
 
-    - name: 解压 helm 二进制到 /usr/local/bin
+    - name: "Extract the helm binary"
       ansible.builtin.unarchive:
         src: "{{ package_dir }}/helm-v{{ helm_version }}-linux-amd64.tar.gz"
         dest: /tmp
         remote_src: true
         creates: /tmp/linux-amd64/helm
 
-    - name: 复制 helm 到 /usr/local/bin
+    - name: "Copy helm to /usr/local/bin"
       ansible.builtin.copy:
         src: /tmp/linux-amd64/helm
         dest: /usr/local/bin/helm
         mode: "0755"
         remote_src: true
 
-    - name: 验证 helm 版本
+    - name: "Verify the helm version"
       ansible.builtin.command: helm version --short
       register: init_helm_ver
       changed_when: false
       failed_when: init_helm_ver.stdout is not search('v' ~ helm_version)
   tags: [kubeadm]
 
-- name: "5.4 渲染 kubeadm init 配置（v1beta4）"
+- name: "Render the kubeadm init configuration (v1beta4)"  # 手册 5.4
   ansible.builtin.template:
     src: kubeadm-init.yml.j2
     dest: /etc/kubeadm/kubeadm-init.yml
     mode: "0600"
   tags: [kubeadm]
 
-- name: "5.4 校验配置（kubeadm config validate）"
+- name: "Validate the configuration (kubeadm config validate)"  # 手册 5.4
   ansible.builtin.command:
     cmd: kubeadm config validate --config /etc/kubeadm/kubeadm-init.yml
   changed_when: false
   tags: [kubeadm]
 
-- name: 是否已初始化（admin.conf 存在即跳过 init）
+- name: "Skip init when already initialized (admin.conf exists)"  # 手册 5.4
   ansible.builtin.stat:
     path: /etc/kubernetes/admin.conf
   register: init_admin_conf
   tags: [kubeadm]
 
-- name: "5.4 拉取 K8s 系统镜像（kubeadm images pull；失败=Harbor 缺镜像，立即停止）"
+- name: "Pull the K8s system images (missing Harbor images abort)"  # 手册 5.4
   ansible.builtin.command:
     cmd: kubeadm config images pull --config /etc/kubeadm/kubeadm-init.yml
   changed_when: false
   tags: [kubeadm]
 
-- name: "5.4 kubeadm init（幂等：admin.conf 已存在则跳过；输出含 join token 故 no_log）"
+- name: "Run kubeadm init (idempotent, no_log)"  # 手册 5.4
   when: not init_admin_conf.stat.exists
   block:
-    - name: kubeadm init
+    - name: "Run kubeadm init"
       ansible.builtin.command:
         cmd: kubeadm init --config /etc/kubeadm/kubeadm-init.yml
       args:
         creates: /etc/kubernetes/admin.conf
       no_log: true
 
-    - name: init 完成
+    - name: "Report init completion"
       ansible.builtin.debug:
         msg: "kubeadm init 完成：controlPlaneEndpoint={{ vip }}:{{ vip_port }}，证书有效期叶子 10 年 / CA 20 年"
   tags: [kubeadm]
 
-- name: root 的 kubeconfig
+- name: "Prepare the root kubeconfig"
   block:
-    - name: /root/.kube 目录
+    - name: "Create /root/.kube"
       ansible.builtin.file:
         path: /root/.kube
         state: directory
         mode: "0700"
 
-    - name: admin.conf → /root/.kube/config
+    - name: "Install admin.conf as /root/.kube/config"
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: /root/.kube/config
@@ -98,7 +98,7 @@
   tags: [kubeadm]
 
 # ---- 门禁：4 个 static pod 全 Running，etcd 健康；节点 NotReady 属预期（CBI 未装）----
-- name: 等待本节点 4 个 static pod 全部 Running（etcd/apiserver/scheduler/controller-manager）
+- name: "Wait for the four static pods to be Running"  # etcd/apiserver/scheduler/controller-manager
   ansible.builtin.command:
     cmd: >-
       kubectl -n kube-system get pods --field-selector spec.nodeName={{ node_name }}
@@ -114,7 +114,7 @@
   delay: 10
   tags: [kubeadm, verify]
 
-- name: etcd 健康检查（手册 5.4：etcdctl endpoint health）
+- name: "Check etcd health (etcdctl endpoint health)"  # 手册 5.4
   ansible.builtin.shell: >-
     crictl exec "$(crictl ps --name etcd -q | head -n1)"
     etcdctl --endpoints=https://127.0.0.1:2379
@@ -129,13 +129,13 @@
   failed_when: init_etcd_health.stdout is not search('is healthy[:] successfully')
   tags: [kubeadm, verify]
 
-- name: 展示节点状态（NotReady 属预期，装完 Calico 才 Ready）
+- name: "Show node status (NotReady is expected before Calico)"
   ansible.builtin.command: kubectl get nodes -o wide
   register: init_nodes
   changed_when: false
   tags: [kubeadm, verify]
 
-- name: 节点状态输出
+- name: "Print node status"
   ansible.builtin.debug:
     msg: "{{ init_nodes.stdout_lines }}"
   tags: [kubeadm, verify]

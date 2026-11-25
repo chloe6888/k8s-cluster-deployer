@@ -1,11 +1,11 @@
 ---
-- name: daemon-reload 并重启 containerd
+- name: "Reload systemd and restart containerd"
   ansible.builtin.systemd:
     name: containerd
     state: restarted
     daemon_reload: true
 
-- name: 重启 containerd
+- name: "Restart containerd"
   ansible.builtin.systemd:
     name: containerd
     state: restarted
