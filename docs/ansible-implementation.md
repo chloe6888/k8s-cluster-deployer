@@ -53,7 +53,7 @@ k8s-cluster-deployer/
 ├── config/versions.yml          # 版本唯一来源（已有）
 ├── inventories/<集群>/
 │   ├── hosts.yml                # 分组：masters、workers、first_master、k8s_all
-│   ├── files/harbor-ca.crt      # 集群专属，.gitignore
+│   ├── files/harbor-ca.crt      # 集群专属，.gitignore；仅 harbor_use_private_ca=true 时需要（决策 #41）
 │   ├── group_vars/all/main.yml  # 原 k8s-deploy.env
 │   ├── group_vars/all/vault.yml # 原 k8s-secrets.env（ansible-vault 加密）
 │   └── host_vars/k8s-master0*.yml  # 原 node.env（master 专属；worker 变量内联在 hosts.yml）
@@ -100,7 +100,7 @@ k8s-cluster-deployer/
 | 二进制、Chart、公钥 | 手册 1.6 文件清单中的全部文件 | 控制机把本仓库 `artifacts/`（79MB 级）校验后推送到节点（决策 #39，统一单来源；文件站分发已取消） |
 | 镜像 | 手册 1.6 镜像清单，全部推到 Harbor 公开项目 | 资源准备机推送，Ansible 不负责推送，只在阶段 30 做检查 |
 | deb 包 | Kubernetes 源与系统包都在内网 apt 站 | 内网 apt 站 |
-| Harbor CA | 集群专属，不入仓库 | 放在控制机上该集群的 `files/harbor-ca.crt` |
+| Harbor CA | 集群专属，不入仓库；仅私有 CA 签发的 Harbor 需要（决策 #41） | `harbor_use_private_ca: true` 时放在控制机上该集群的 `files/harbor-ca.crt`；公网可信 CA 签发则保持 false，不建 certs.d |
 
 校验方式：控制机对 `artifacts/checksums/SHA256SUMS` 全量校验（仓库相对路径，决策 #25），逐文件断言 `: OK` 后再经 `copy` 推送；`copy` 幂等，重跑只推变化的文件。校验失败就停止，不会继续安装。`Release.key` 另外还要核对 sha256 与 GPG 指纹。**节点上不得访问公网**。
 
@@ -245,7 +245,7 @@ k8s-cluster-deployer/
 - **步骤**：
   1. **containerd 2.3.0**：获取并校验压缩包与 systemd 单元（单元文件随 artifact 渠道取到 `package_dir`，同样受控于控制机侧校验；仓库侧源文件是 `templates/systemd/containerd.service.j2`，纯静态内容）；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；从 `package_dir` 安装单元，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
   2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/google_containers/pause:3.10.2`（与 kubeadm 的 `imageRepository` 同路径，决策 #4）；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4；2.x 的 default 输出是单引号，且 transfer 段也有 `config_path` 键，替换必须锚定 registry 段头，不能按 `"config_path = \"\"` 字面匹配）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。三处替换与解压安装都挂 `Restart containerd` 通知，flush 点在 Harbor 访问配置之前（后续 hosts.toml 依赖运行态）。
-  3. **Harbor 访问**（修订点 4）：对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。生产环境不使用 `skip_verify`。
+  3. **Harbor 访问**（修订点 4，决策 #41）：`harbor_use_private_ca` 为 true 时，对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。为 false（默认，Harbor 证书是公网可信 CA 签发）则整段跳过，containerd 走系统信任链。生产环境不使用 `skip_verify`。
   4. **runc 1.4.2**：获取并校验 `runc.amd64` 与 `runc.sha256sum`；卸载 apt 版 runc；安装到 `/usr/local/sbin/runc`；变更后重启 containerd。
   5. **nerdctl 2.3.0**：获取并校验压缩包，解压到 `/usr/local/bin`。
   6. 启动 containerd 并设为开机启动。

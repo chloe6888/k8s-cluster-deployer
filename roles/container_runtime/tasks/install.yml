@@ -119,7 +119,8 @@
     - name: Restart containerd after config or runtime changes
       ansible.builtin.meta: flush_handlers
 
-    # 手册 4.2；修订 4：逐个 registry 主机配置 certs.d + hosts.toml + CA
+    # 手册 4.2；修订 4：逐个 registry 主机配置 certs.d + hosts.toml + CA。
+    # 列表为空（决策 #41：无私有 CA 需求，Harbor 证书走公网可信 CA）时整个循环为空操作
     - name: Configure Harbor access (certs.d + hosts.toml + CA)
       ansible.builtin.include_tasks: harbor-certs.yml
       loop: "{{ runtime_registry_hosts }}"

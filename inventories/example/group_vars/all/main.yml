@@ -8,7 +8,8 @@ cluster_prefix: demo                    # 全小写；用于节点名、HAProxy 
 harbor: harbor.example.internal         # Harbor 域名（含端口时一并写入）
 mirror: http://mirror.example.internal  # 内网制品 / apt 镜像站根 URL
 app_registry: ""                        # 业务镜像仓库主机（为空则不单独配置 certs.d）
-apt_k8s_url: http://mirror.example.internal/repository/kubernetes-v1.36/deb/   # 以 / 结尾，不得指向公网
+harbor_use_private_ca: false            # 决策 #41：Harbor 证书是公网可信 CA 签发时保持 false（不建 certs.d）；私有 CA 置 true 并提供 files/harbor-ca.crt
+apt_k8s_url: https://mirrors.aliyun.com/kubernetes-new/core/stable/v1.36/deb/   # 以 / 结尾，不得指向公网
 ntp_servers:                            # 内网 NTP，建议至少 2 个
   - 10.100.0.10
   - 10.100.0.11
@@ -31,8 +32,8 @@ ext_vip: 10.200.0.200                  # 须在外网网段内且未占用，且
 ext_vip_prefix: 24
 vip_port: 16443                         # haproxy 与 apiserver 同机时不能是 6443
 extra_cert_sans: []                     # apiserver 证书附加 SAN（DNS 名或 IP，如前置 NGINX/负载均衡地址）
-ka_vrid: 51                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
-ka_ext_vrid: 52
+ka_vrid: 61                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
+ka_ext_vrid: 61
 ka_advert_int: 1                        # 修订点 13：内外网统一 1
 ka_ext_advert_int: 1
 
