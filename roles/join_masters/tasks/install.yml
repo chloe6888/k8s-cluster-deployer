@@ -54,6 +54,13 @@
             mode: "0600"
           no_log: true
 
+        # 渲染后先让 kubeadm 校验 v1beta4 JoinConfiguration，避免错误配置进入实际 join。
+        - name: Validate the control-plane join configuration
+          ansible.builtin.command:
+            cmd: kubeadm config validate --config /etc/kubeadm/kubeadm-join-controlplane.yml
+          changed_when: false
+          check_mode: false
+
         # 幂等由 kubelet.conf 存在性把关；命令行只引用配置文件、不含 token，
         # 输出也不打印凭据，所以不加 no_log，失败时能直接看到 kubeadm 的报错
         - name: Run kubeadm join --control-plane
