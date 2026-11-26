@@ -9,7 +9,7 @@ runtime_app_registry_ca_file: "{{ inventory_dir }}/files/harbor-ca.crt"
 
 # 阶段 30 镜像预检清单（实施方案 §6.5；K8s 系统镜像由阶段 50 kubeadm config images pull 验证）
 runtime_required_images:
-  - "{{ registry }}/pause:{{ pause_version }}"
+  - "{{ registry }}/google_containers/pause:{{ pause_version }}"
   - "{{ registry }}/tigera/operator:{{ tigera_operator_image_tag }}"
   - "{{ registry }}/calico/node:v{{ calico_version }}"
   - "{{ registry }}/calico/cni:v{{ calico_version }}"
