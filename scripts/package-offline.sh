@@ -29,4 +29,14 @@ if [ -f $A/keys/kubernetes/Release.key ]; then
 else
   echo "警告：artifacts/keys/kubernetes/Release.key 不存在，部署文档 5.1 需要它，请先补上" >&2
 fi
-echo "已生成 $OUT（$(ls "$OUT" | wc -l) 个文件）"
+# Ansible 的 file_url 模式按扁平文件名从 SHA256SUMS 取校验值；清单必须和文件一起上传。
+(
+  cd "$OUT"
+  for f in *; do
+    [ -f "$f" ] || continue
+    [ "$f" = "SHA256SUMS" ] && continue
+    sha256sum "$f"
+  done
+) > "$OUT/SHA256SUMS"
+
+echo "已生成 $OUT（$(find "$OUT" -maxdepth 1 -type f | wc -l) 个文件，含 SHA256SUMS）"
