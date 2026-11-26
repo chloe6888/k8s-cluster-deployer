@@ -1,5 +1,5 @@
 ---
-# 阶段 40：kubelet / kubeadm / kubectl / crictl（手册 5.1/5.2）。全部节点并行。
+# kubelet / kubeadm / kubectl / crictl（手册 5.1/5.2）。全部节点并行。
 - name: K8s packages
   hosts: k8s_all
   gather_facts: true

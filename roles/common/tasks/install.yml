@@ -1,5 +1,5 @@
 ---
-# 阶段通用：节点名拼装 + host_vars 显式性断言。所有 --tags 选择下都必须先执行，故打 always。
+# 公共前置：节点名拼装 + host_vars 显式性断言。所有 --tags 选择下都必须先执行，故打 always。
 - name: Prepare the common node facts
   tags: [always]
   block:

@@ -1,5 +1,5 @@
 ---
-# 阶段 90：部署后验收（手册 9.1/9.2）。逐项检查、失败汇总后一次性报告，不逐条中断。
+# 部署后验收（手册 9.1/9.2）。逐项检查、失败汇总后一次性报告，不逐条中断。
 # 危险探测（连通性 / VIP 漂移）单独打 never 标签，显式 --tags 才执行。
 - name: Import the acceptance checks
   ansible.builtin.import_tasks: checks.yml

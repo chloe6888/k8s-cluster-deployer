@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""网段冲突检查（手册 1.4，阶段 00 步骤 7）。
+"""网段冲突检查（手册 1.4）。
 
 只依赖标准库 ipaddress。输入经环境变量 K8S_VARS 传 JSON：
 pod_cidr / service_cidr / node_cidr / extra_nets，路由表从 `ip -4 route show` 现场读取。

@@ -1,5 +1,5 @@
 ---
-# 公共获取任务：本身不带阶段标签——由调用方的 import_role 把所在 block 的标签传进来。
+# 公共获取任务：本身不带标签——由调用方的 import_role 把所在 block 的标签传进来。
 - name: Fetch and verify the artifact files
   block:
     - name: Normalize the artifact file list

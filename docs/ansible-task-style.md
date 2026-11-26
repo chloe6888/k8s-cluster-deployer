@@ -7,7 +7,7 @@
 ## 1. 文件组织
 
 - 每个 role 的 `tasks/main.yml` 只做 `import_tasks`，具体任务放在按用途命名的文件里：`install.yml`（流程）、`verify.yml`（只读验证）。
-- 一个文件只做一件事，文件顶部第一行 `---`，紧接一行注释说明"阶段、手册章节、在哪些主机上执行"。
+- 一个文件只做一件事，文件顶部第一行 `---`，紧接一行注释说明"作用、手册章节、在哪些主机上执行"。
 - 文件里每个任务都放在一个 `block` 下（第 4 节），不要出现顶层的零散任务。
 - 模板放 `templates/`，一次性脚本放 `files/`，role 内部变量默认值放 `defaults/main.yml`，不放 `vars/`（除非不希望被覆盖）。
 
@@ -50,10 +50,10 @@ tags          # 只在 block 上写，个别任务例外见第 3 节
 
 - 标签只写在 `block` 上，任务里不再重复。
 - 标签分三类：
-  - **阶段标签**：`os`、`ha`、`runtime`、`kubeadm`、`cni`、`lb`、`gateway`；
+  - **流程标签**：`os`、`ha`、`runtime`、`kubeadm`、`cni`、`lb`、`gateway`；
   - **验证标签**：`verify`，只用于只读的检查任务，放在独立的 `verify.yml` 里，不与流程任务混在同一个 `block`；
   - **危险标签**：`never`，用于默认不执行的任务（内核固定、重置、漂移演练、外网探测）。
-- **流程里的"等待"任务（如等 Pod Ready）属于流程，只打阶段标签，不打 `verify`**，否则 `--skip-tags verify` 会跳过它们，后面的步骤接着失败。
+- **流程里的"等待"任务（如等 Pod Ready）属于流程，只打流程标签，不打 `verify`**，否则 `--skip-tags verify` 会跳过它们，后面的步骤接着失败。
 - 想要"无论加什么 `--tags` 都必须执行"的守卫任务，才用 `always`，并且要克制。
 - `include_role` 的标签不会传给被包含的任务，需要继承标签时用 `import_role`，或写 `apply: { tags: [...] }`。优先 `import_role`。
 
@@ -63,7 +63,7 @@ tags          # 只在 block 上写，个别任务例外见第 3 节
 
 ```yaml
 ---
-# 阶段 60：Calico（手册第 6 章），只在 first_master 上执行
+# Calico（手册第 6 章），只在 first_master 上执行
 - name: Install Calico
   tags: [cni]
   environment:
@@ -76,7 +76,7 @@ tags          # 只在 block 上写，个别任务例外见第 3 节
 ```
 
 - 需要 `kubectl` / `helm` 的 block 都设置 `KUBECONFIG`，不依赖 `~/.kube/config`。
-- 只在 master01 执行的阶段，用 playbook 的 `hosts: first_master` 控制，不在任务里写 `assert inventory_hostname == …`。
+- 只在 master01 执行的步骤，用 playbook 的 `hosts: first_master` 控制，不在任务里写 `assert inventory_hostname == …`。
 
 ## 5. command 与 shell
 
@@ -118,7 +118,7 @@ tags          # 只在 block 上写，个别任务例外见第 3 节
 
 - role 自己定义的变量加 role 前缀（`calico_xxx`、`haproxy_xxx`）；`register` 的变量也一样，命名为 `<role>_<含义>`。
 - role 里不出现任何集群专属的值，全部来自 `group_vars`、`host_vars`、`config/versions.yml`。
-- 默认值写在 `defaults/main.yml`；必填项不给默认值，由预检阶段统一断言。
+- 默认值写在 `defaults/main.yml`；必填项不给默认值，由 preflight 统一断言。
 
 **密钥**
 
@@ -163,7 +163,7 @@ rules:
     indent-sequences: true
 ```
 
-## 10. 反例与正例对照（来自 Calico 阶段任务）
+## 10. 反例与正例对照（来自 Calico 任务）
 
 | 问题 | 反例 | 正例 |
 | --- | --- | --- |
@@ -181,7 +181,7 @@ rules:
 | 重复打印 | 一个任务取状态，一个任务 `debug` 打印 | `register` 后 `debug: var=` 一个任务即可 |
 | 守卫写成任务 | 每个 role 里 `assert inventory_hostname == …` | playbook 里 `hosts: first_master` |
 
-## 11. 完整示例（Calico 阶段，按本规范改写）
+## 11. 完整示例（Calico，按本规范改写）
 
 `roles/calico/tasks/main.yml`：
 
@@ -198,7 +198,7 @@ rules:
 
 ```yaml
 ---
-# 阶段 60：Calico（版本见 config/versions.yml；手册第 6 章），只在 first_master 上执行
+# Calico（版本见 config/versions.yml；手册第 6 章），只在 first_master 上执行
 - name: Install Calico
   tags: [cni]
   environment:
@@ -336,7 +336,7 @@ rules:
 
 ```yaml
 ---
-# 阶段 60 验证：只读
+# 只读
 - name: Verify Calico
   tags: [verify]
   environment:

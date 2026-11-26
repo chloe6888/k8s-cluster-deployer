@@ -1,5 +1,5 @@
 ---
-# 阶段 99：重置集群（never 标签，独立执行）：
+# 重置集群（never 标签，独立执行）：
 # ansible-playbook playbooks/reset.yml --tags reset -e confirm_reset=yes
 # 双确认：既要点 --tags reset，又要显式传 confirm_reset=yes；HA 与系统基线不动。
 - name: Import the reset tasks

@@ -1,5 +1,5 @@
 ---
-# 阶段 00①：变量预检（控制器本地执行，只读）。属于部署流程（阶段标签 os），不是 verify 阶段。
+# 变量预检（控制器本地执行，只读）。属于部署流程（标签 os），不是 verify。
 - name: Validate the cluster variables on the controller
   tags: [os]
   block:

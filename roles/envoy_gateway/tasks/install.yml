@@ -1,5 +1,5 @@
 ---
-# 阶段 81：Envoy Gateway（手册第 8 章；修订 9：Gateway 监听 443）。
+# Envoy Gateway（手册第 8 章；修订 9：Gateway 监听 443）。
 - name: Install Envoy Gateway
   tags: [gateway]
   environment:
@@ -8,7 +8,7 @@
     ansible.builtin.shell:
       executable: /bin/bash
   block:
-    # metallb 阶段已建 charts 目录，但本阶段单独重跑时也要能自举
+    # metallb 已建 charts 目录，但本 role 单独重跑时也要能自举
     - name: Create the charts directory
       ansible.builtin.file:
         path: "{{ package_dir }}/charts"

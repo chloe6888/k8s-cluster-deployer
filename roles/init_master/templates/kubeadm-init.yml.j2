@@ -1,5 +1,5 @@
 # kubeadm v1beta4
-# 由 Ansible 渲染，勿手改；重跑阶段 50 幂等（init 由 admin.conf 存在性把关）。
+# 由 Ansible 渲染，勿手改；重跑本 role 幂等（init 由 kube-system/kubeadm-config 存在性把关）。
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
 localAPIEndpoint:

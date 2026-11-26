@@ -1,5 +1,5 @@
 ---
-# 阶段 10：系统基线（手册第 2 章，除 2.5 内核固定外）。全部节点并行。
+# 系统基线（手册第 2 章，除 2.5 内核固定外）。全部节点并行。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml
 

@@ -1,5 +1,5 @@
 ---
-# 阶段 11：固定并锁定内核（手册 2.5）。单独 playbook 执行（--tags os）；pin_kernel=false 时 play 级跳过。
+# 固定并锁定内核（手册 2.5）。单独 playbook 执行（--tags os）；pin_kernel=false 时 play 级跳过。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml
 

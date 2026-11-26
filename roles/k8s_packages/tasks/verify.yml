@@ -1,5 +1,5 @@
 ---
-# 阶段 40 验证：只读核对版本、hold 与 crictl（手册 5.1/5.2）。
+# 只读核对版本、hold 与 crictl（手册 5.1/5.2）。
 - name: Verify the K8s packages
   tags: [kubeadm, verify]
   block:

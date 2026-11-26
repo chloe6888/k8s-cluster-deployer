@@ -1,5 +1,5 @@
 ---
-# 阶段 20：高可用入口（手册 3.1–3.6 + 3.8/3.9 启动次序）。
+# 高可用入口（手册 3.1–3.6 + 3.8/3.9 启动次序）。
 # 三段：并行装配置 → serial:1 按序拉起（master01 先持 VIP）→ 汇总验证。
 - name: Install and configure HAProxy and keepalived (masters in parallel)
   hosts: masters

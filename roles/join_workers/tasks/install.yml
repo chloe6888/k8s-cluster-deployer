@@ -1,5 +1,5 @@
 ---
-# 阶段 70：worker 加入（手册 5.9）。kubectl 核对统一 delegate 到 master01。
+# worker 加入（手册 5.9）。kubectl 核对统一 delegate 到 master01。
 - name: Join the cluster
   tags: [kubeadm]
   environment:
@@ -17,7 +17,7 @@
     - name: Join the cluster
       when: not jw_joined.stat.exists
       block:
-        # worker 上同样跑 calico-node，镜像内 nft 可用性先检（同阶段 60 的教训）
+        # worker 上同样跑 calico-node，镜像内 nft 可用性先检（同 calico 的教训）
         - name: Run the nft preflight
           ansible.builtin.command:
             cmd: >-

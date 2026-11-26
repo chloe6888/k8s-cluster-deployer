@@ -1,5 +1,5 @@
 ---
-# 阶段 80：MetalLB（版本见 config/versions.yml；手册第 7 章），只在 first_master 上执行。
+# MetalLB（版本见 config/versions.yml；手册第 7 章），只在 first_master 上执行。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml
 

@@ -1,5 +1,5 @@
 ---
-# 阶段 60 验证：只读展示节点与 calico-node Pod（operator 模式下在 calico-system 命名空间）。
+# 只读展示节点与 calico-node Pod（operator 模式下在 calico-system 命名空间）。
 - name: Verify Calico
   tags: [cni, verify]
   environment:

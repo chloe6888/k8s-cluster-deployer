@@ -1,5 +1,5 @@
 ---
-# 阶段 10 验证：只读核对基线终态（手册 2.2/2.3/2.4/2.7）。
+# 只读核对基线终态（手册 2.2/2.3/2.4/2.7）。
 - name: Verify the OS baseline
   tags: [os, verify]
   block:

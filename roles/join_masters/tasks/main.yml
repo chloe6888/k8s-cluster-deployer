@@ -1,5 +1,5 @@
 ---
-# 阶段 51：master02/03 加入控制面（手册 5.5，修订 2/5/6/7/8）。
+# master02/03 加入控制面（手册 5.5，修订 2/5/6/7/8）。
 # playbook 已限定 hosts: masters:!first_master 且 serial:1 逐台执行。
 # 每台节点使用独立新生成的 token 与 certificate-key（均在 master01 现场生成，no_log）。
 - name: Import the install tasks

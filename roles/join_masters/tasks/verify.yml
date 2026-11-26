@@ -1,5 +1,5 @@
 ---
-# 阶段 51 验证：只读核对 etcd 成员数/健康与节点状态（手册 5.5；NotReady 属预期，装完 Calico 才 Ready）。
+# 只读核对 etcd 成员数/健康与节点状态（手册 5.5；NotReady 属预期，装完 Calico 才 Ready）。
 - name: Verify the control-plane join
   tags: [kubeadm, verify]
   environment:

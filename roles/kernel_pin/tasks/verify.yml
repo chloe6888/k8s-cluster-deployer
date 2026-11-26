@@ -1,5 +1,5 @@
 ---
-# 阶段 11 验证：只读核对运行内核与 hold 列表（手册 2.5）。
+# 只读核对运行内核与 hold 列表（手册 2.5）。
 - name: Verify the pinned kernel
   tags: [os, verify]
   block:

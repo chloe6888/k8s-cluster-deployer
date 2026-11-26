@@ -1,5 +1,5 @@
 ---
-# 阶段 11：固定并锁定内核（手册 2.5），全部节点（master 逐台 / worker 分批由 playbook serial 控制）。
+# 固定并锁定内核（手册 2.5），全部节点（master 逐台 / worker 分批由 playbook serial 控制）。
 # 危险操作（装内核、重启、清内核），按规范打 never：默认跳过，显式 --tags os 才执行。
 - name: Pin the kernel
   tags: [os, never]

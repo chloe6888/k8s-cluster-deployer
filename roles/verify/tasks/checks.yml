@@ -1,5 +1,5 @@
 ---
-# 阶段 90：验收检查（手册 9.1）。节点级检查在每台节点本机，集群级检查委托 master01。
+# 验收检查（手册 9.1）。节点级检查在每台节点本机，集群级检查委托 master01。
 - name: Run the acceptance checks
   tags: [verify]
   module_defaults:
@@ -136,7 +136,7 @@
           run_once: true
 
         # 手册 9.1：只核系统命名空间（-A 连业务 Pod 一起看，滚动中的瞬时状态会
-        # 误报失败）；查询失败也只记录不中止，汇总阶段统一判
+        # 误报失败）；查询失败也只记录不中止，汇总时统一判
         - name: Verify system pods are Running or Completed
           ansible.builtin.command:
             cmd: >-

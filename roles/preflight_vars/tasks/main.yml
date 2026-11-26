@@ -1,4 +1,4 @@
 ---
-# 阶段 00①：变量预检（控制器本地、只读；check_vars.py 全量核对 inventory/host_vars/vault）。
+# 变量预检（控制器本地、只读；check_vars.py 全量核对 inventory/host_vars/vault）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

@@ -1,7 +1,7 @@
 # k8s-cluster-deployer
 
 Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0、内网 Harbor、双网卡、多集群复用）。
-两部分组成：**离线资源工程化**（`artifacts/` + CI 自动下载校验）与 **Ansible 部署工程**（`playbooks/` + `roles/`，按《部署手册》逐阶段落地，实施方案见 [`docs/ansible-implementation.md`](docs/ansible-implementation.md)）。
+两部分组成：**离线资源工程化**（`artifacts/` + CI 自动下载校验）与 **Ansible 部署工程**（`playbooks/` + `roles/`，按《部署手册》分步落地，实施方案见 [`docs/ansible-implementation.md`](docs/ansible-implementation.md)）。
 
 ## 目录
 
@@ -13,8 +13,8 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 | `scripts/` | 资源下载 / 校验 / 展平打包工具 |
 | `ansible.cfg`、`requirements.yml`、`collections/` | Ansible 控制机配置与离线 collection |
 | `inventories/example/` | 带完整注释的参考样例（hosts/group_vars/host_vars）；真实集群 inventory 只存部署机本地，不入本仓库 |
-| `playbooks/` | 阶段化 playbook：preflight → os-baseline → ha-entry → container-runtime → k8s-packages → init-master/join-masters → calico → join-workers → metallb → envoy-gateway → verify；kernel-pin 与 reset 单独执行 |
-| `roles/` | 各阶段实现，配置内容以《部署手册》对应章节为准 |
+| `playbooks/` | 分步 playbook：preflight → os-baseline → ha-entry → container-runtime → k8s-packages → init-master/join-masters → calico → join-workers → metallb → envoy-gateway → verify；kernel-pin 与 reset 单独执行 |
+| `roles/` | 各步骤实现，配置内容以《部署手册》对应章节为准 |
 | `docs/` | `DECISIONS.md` 决策记录、`ansible-implementation.md` 实施方案 |
 
 ## 多集群规划
@@ -34,8 +34,8 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 # 密码变量放 inventories/<集群>/group_vars/all/vault.yml（ansible-vault 加密，已被 .gitignore 排除）
 
 ansible-playbook -i inventories/<集群> playbooks/site.yml --vault-password-file ~/.vault_pass.<集群>  # 整体部署（不含 kernel-pin/reset）
-ansible-playbook -i inventories/<集群> playbooks/ha-entry.yml            # 单阶段
-ansible-playbook -i inventories/<集群> playbooks/ha-entry.yml --tags verify    # 只做验证（所有阶段的 verify 块）
+ansible-playbook -i inventories/<集群> playbooks/ha-entry.yml            # 单独执行一步
+ansible-playbook -i inventories/<集群> playbooks/ha-entry.yml --tags verify    # 只做验证（该 playbook 的 verify 块）
 ansible-playbook -i inventories/<集群> playbooks/ha-entry.yml --limit k8s-master01  # 单台主机
 ansible-playbook -i inventories/<集群> playbooks/join-workers.yml --limit k8s-worker11,k8s-worker12  # worker 灰度
 ansible-playbook -i inventories/<集群> playbooks/kernel-pin.yml --tags os   # 固定内核（需 pin_kernel=true，会重启；never 标签须显式点名）
@@ -44,7 +44,7 @@ ansible-playbook -i inventories/<集群> playbooks/verify.yml --tags failover   
 ansible-playbook -i inventories/<集群> playbooks/reset.yml --tags reset -e confirm_reset=yes  # 重置（双确认，仅测试环境）
 ```
 
-阶段标签（`--tags`）：`os` / `ha` / `runtime` / `kubeadm` / `cni` / `lb` / `gateway`；`verify` 为只读验证；
+流程标签（`--tags`）：`os` / `ha` / `runtime` / `kubeadm` / `cni` / `lb` / `gateway`；`verify` 为只读验证；
 `kernel-pin`、`reset`、连通性与漂移演练带 `never`，必须显式 `--tags` 才会执行（任务书写规范见 `docs/ansible-task-style.md`）。
 
 ## 离线资源命令

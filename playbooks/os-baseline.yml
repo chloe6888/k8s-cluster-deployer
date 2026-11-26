@@ -1,5 +1,5 @@
 ---
-# 阶段 10：操作系统基线（手册第 2 章）。全部节点并行。
+# 操作系统基线（手册第 2 章）。全部节点并行。
 - name: OS baseline
   hosts: k8s_all
   gather_facts: true

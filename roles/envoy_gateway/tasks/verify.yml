@@ -1,5 +1,5 @@
 ---
-# 阶段 81 验证：只读核对入口 IP 与数据面镜像来源（手册 8.4④）。
+# 只读核对入口 IP 与数据面镜像来源（手册 8.4④）。
 - name: Verify Envoy Gateway
   tags: [gateway, verify]
   environment:

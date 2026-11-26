@@ -1,5 +1,5 @@
 ---
-# 阶段 30 验证：只读核对运行时终态（手册 4.1/4.3）。
+# 只读核对运行时终态（手册 4.1/4.3）。
 - name: Verify the container runtime
   tags: [runtime, verify]
   block:
@@ -11,7 +11,7 @@
       failed_when: runtime_containerd_active.stdout | trim != 'active'
       check_mode: false
 
-    # 2.x 版本号无 v 前缀、后面可能跟 commit，锚点与 install 阶段一致（见该处注释）
+    # 2.x 版本号无 v 前缀、后面可能跟 commit，锚点与 install.yml 一致（见该处注释）
     - name: Verify the containerd version is {{ containerd_version }}
       ansible.builtin.command:
         cmd: containerd --version

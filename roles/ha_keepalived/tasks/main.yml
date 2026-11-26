@@ -1,4 +1,4 @@
 ---
-# 阶段 20 中段：keepalived 按 master01→02→03 逐台启动（playbook serial:1 控制）。
+# keepalived 按 master01→02→03 逐台启动（playbook serial:1 控制）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

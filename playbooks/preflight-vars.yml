@@ -1,5 +1,5 @@
 ---
-# 阶段 00①：变量预检（check_vars.py，控制器本地执行；inventory/host_vars/vault 全量核对）。
+# 变量预检（check_vars.py，控制器本地执行；inventory/host_vars/vault 全量核对）。
 - name: Variable preflight (on the controller)
   hosts: localhost
   connection: local

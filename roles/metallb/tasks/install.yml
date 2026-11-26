@@ -1,5 +1,5 @@
 ---
-# 阶段 80：MetalLB L2（手册第 7 章），只在 first_master 上执行。
+# MetalLB L2（手册第 7 章），只在 first_master 上执行。
 # speaker 需特权：命名空间放行 Pod Security Admission。
 - name: Install MetalLB
   tags: [lb]
@@ -9,7 +9,7 @@
     ansible.builtin.shell:
       executable: /bin/bash
   block:
-    # calico 阶段已建 charts 目录，但本阶段单独重跑时也要能自举
+    # calico 已建 charts 目录，但本 role 单独重跑时也要能自举
     - name: Create the charts directory
       ansible.builtin.file:
         path: "{{ package_dir }}/charts"

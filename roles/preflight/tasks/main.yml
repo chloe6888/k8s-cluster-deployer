@@ -1,4 +1,4 @@
 ---
-# 阶段 00②：节点侧预检（全部只读）。属于部署流程（阶段标签 os），不是 verify 阶段。
+# 节点侧预检（只读为主；apt 缓存刷新是修订 15 的唯一例外）。属于部署流程（标签 os），不是 verify。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

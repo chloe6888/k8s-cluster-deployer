@@ -1,5 +1,5 @@
 ---
-# 阶段 80 验证：只读核对外网地址池与 L2 广告存在（手册 7.3）。
+# 只读核对外网地址池与 L2 广告存在（手册 7.3）。
 - name: Verify MetalLB
   tags: [lb, verify]
   environment:

@@ -1,5 +1,5 @@
 ---
-# 阶段 70：worker 分批加入（手册 5.9）。playbook 已限定 hosts: workers 且 serial: worker_batch_size。
+# worker 分批加入（手册 5.9）。playbook 已限定 hosts: workers 且 serial: worker_batch_size。
 # 每批一批专用 token（--ttl 4h，覆盖批次窗口）；批内凭据 no_log。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

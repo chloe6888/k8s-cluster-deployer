@@ -1,5 +1,5 @@
 ---
-# 阶段 50：master01 初始化（手册 5.3/5.4；只跑 first_master）。
+# master01 初始化（手册 5.3/5.4；只跑 first_master）。
 - name: Initialize master01
   hosts: first_master
   gather_facts: true

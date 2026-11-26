@@ -1,5 +1,5 @@
 ---
-# Calico / MetalLB / Envoy Gateway 阶段由 master01 调用；
+# Calico / MetalLB / Envoy Gateway 的安装由 master01 调用；
 # 三台 master 都装，master01 故障后可在其他 master 上继续操作。
 - name: Install helm
   tags: [kubeadm]

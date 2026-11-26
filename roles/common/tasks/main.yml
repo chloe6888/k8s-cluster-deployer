@@ -1,4 +1,4 @@
 ---
-# 公共 role：每个阶段的 playbook 都先带上它（roles: [common, <阶段 role>]）。
+# 公共 role：每个 playbook 都先带上它（roles: [common, <业务 role>]）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

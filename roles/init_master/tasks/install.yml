@@ -1,7 +1,7 @@
 ---
 # k8s-master01 初始化。kubeconfig 只用 /etc/kubernetes/admin.conf，不依赖 ~/.kube。
-# helm 的安装不在本文件：它与集群初始化无关，阶段 40 k8s_packages 装到全部 master
-# （2026-11-26 起，决策 #14），Calico 等阶段直接可用。
+# helm 的安装不在本文件：它与集群初始化无关，k8s_packages role 装到全部 master
+# （2026-11-26 起，决策 #14），Calico 等 role 直接可用。
 - name: Initialize k8s-master01
   tags: [kubeadm]
   environment:
@@ -41,7 +41,7 @@
 
     # 以 apiserver 中是否存在 kubeadm-config 判断是否已初始化（不用 admin.conf 是否存在：
     # admin.conf 在 init 早期就已写出，init 中途失败时会被误判为已初始化）
-    # 半初始化时返回非 0，init 会重跑并在 preflight 报"文件已存在"，此时应先执行 reset 阶段
+    # 半初始化时返回非 0，init 会重跑并在 preflight 报"文件已存在"，此时应先执行 reset
     - name: Check whether the cluster is already initialized
       ansible.builtin.command:
         cmd: kubectl -n kube-system get configmap kubeadm-config
@@ -57,7 +57,7 @@
         cmd: kubeadm config images pull --config /etc/kubeadm/kubeadm-init.yml
       changed_when: false
 
-    # 输出含 join token，但 token 24h 过期且 join 阶段会重新生成；
+    # 输出含 join token，但 token 24h 过期且 join 时会重新生成；
     # 不加 no_log，保证失败时能直接看到原因
     - name: Run kubeadm init
       when: init_cluster_state.rc != 0
@@ -86,7 +86,7 @@
         mode: "0600"
         remote_src: true
 
-    # 门禁（流程内等待，不打 verify）：4 个 static pod 全 Running 才放行后续阶段
+    # 门禁（流程内等待，不打 verify）：4 个 static pod 全 Running 才放行后续步骤
     # 此时没有 CNI，节点为 NotReady、CoreDNS 为 Pending 属正常，不在这里等
     - name: Wait for the four static pods to be Running
       ansible.builtin.command:

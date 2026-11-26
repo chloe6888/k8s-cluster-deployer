@@ -1,5 +1,5 @@
 ---
-# 阶段 60：Calico 3.32.2 两件套 Chart（手册第 6 章；只跑 master01）。
+# Calico 3.32.2 两件套 Chart（手册第 6 章；只跑 master01）。
 - name: Calico
   hosts: first_master
   gather_facts: true

@@ -1,5 +1,5 @@
 ---
-# 阶段 81：Envoy Gateway（版本见 config/versions.yml；手册第 8 章），只在 first_master 上执行。
+# Envoy Gateway（版本见 config/versions.yml；手册第 8 章），只在 first_master 上执行。
 # 证书走 vault → /dev/shm 临时文件 → Secret，用后必删（always）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

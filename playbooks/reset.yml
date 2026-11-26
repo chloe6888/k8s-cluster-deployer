@@ -1,5 +1,5 @@
 ---
-# 阶段 99：重置集群（独立执行，不入 site.yml；worker 先于 master）。
+# 重置集群（独立执行，不入 site.yml；worker 先于 master）。
 # 双确认门禁（never 标签 + 显式变量）：
 #   ansible-playbook playbooks/reset.yml --tags reset -e confirm_reset=yes
 - name: Reset workers

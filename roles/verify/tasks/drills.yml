@@ -1,5 +1,5 @@
 ---
-# 阶段 90 演练（手册 9.1/9.2）：默认不执行（never），显式 --tags connectivity / --tags failover 才跑。
+# 验收演练（手册 9.1/9.2）：默认不执行（never），显式 --tags connectivity / --tags failover 才跑。
 - name: Run the DNS and cross-node connectivity tests
   tags: [never, connectivity]
   when: busybox_tag | default('') | length > 0

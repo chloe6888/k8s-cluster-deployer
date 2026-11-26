@@ -1,5 +1,5 @@
 ---
-# 阶段 20 中段：keepalived 有序启动（手册 3.5）。master01 先持有两个 VIP，后续节点才启动。
+# keepalived 有序启动（手册 3.5）。master01 先持有两个 VIP，后续节点才启动。
 - name: Start keepalived in priority order
   tags: [ha]
   block:

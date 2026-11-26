@@ -1,5 +1,5 @@
 ---
-# 阶段 99：重置（手册 9.3 语义）。etcd 数据不可恢复，confirm_reset 双确认放最前。
+# 重置（手册 9.3 语义）。etcd 数据不可恢复，confirm_reset 双确认放最前。
 - name: Reset the cluster
   tags: [never, reset]
   module_defaults:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VIP 归属网段检查（阶段 00）：内网 VIP 须在 node_cidr 内，外网 VIP 须与本机外网地址同网段。"""
+"""VIP 归属网段检查：内网 VIP 须在 node_cidr 内，外网 VIP 须与本机外网地址同网段。"""
 import ipaddress
 import json
 import os

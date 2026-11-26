@@ -1,5 +1,5 @@
 ---
-# 阶段 30：容器运行时（手册第 4 章）+ 镜像预检（修订 4/14）。全部节点并行。
+# 容器运行时（手册第 4 章）+ 镜像预检（修订 4/14）。全部节点并行。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml
 

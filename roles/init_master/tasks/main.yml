@@ -1,5 +1,5 @@
 ---
-# 阶段 50：master01 初始化（手册 5.4，修订 2/5/6/7/8 + 证书年限 87600h/175200h）。
+# master01 初始化（手册 5.4，修订 2/5/6/7/8；叶子与 CA 证书均 175200h，决策 #19）。
 # 只在 first_master（playbook hosts: first_master）执行；CNI 未装前节点 NotReady 属预期。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

@@ -1,5 +1,5 @@
 ---
-# 阶段 20 上半段：安装并配置 HAProxy / keepalived，三台 master 并行。
+# 安装并配置 HAProxy / keepalived，三台 master 并行。
 # keepalived 的有序启动在 ha_keepalived role（serial play）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

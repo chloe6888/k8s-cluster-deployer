@@ -1,5 +1,5 @@
 ---
-# 阶段 90：部署后验收（手册 9.1；失败汇总后一次性报告）。
+# 部署后验收（手册 9.1；失败汇总后一次性报告）。
 # 手册 9.2 连通性与 VIP 漂移演练打 never 标签：
 #   ansible-playbook playbooks/verify.yml --tags connectivity
 #   ansible-playbook playbooks/verify.yml --tags failover

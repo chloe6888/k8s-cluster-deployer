@@ -21,7 +21,7 @@ file_url: "{{ mirror }}/repository/tmp-file/k8sv1.36"
 node_iface: eth1
 ext_iface: eth0
 node_cidr: 10.100.0.0/24
-pod_cidr: 10.244.0.0/14                 # 须通过阶段 00 网段冲突检查
+pod_cidr: 10.244.0.0/14                 # 须通过 preflight 网段冲突检查
 service_cidr: 10.96.0.0/12
 extra_nets: []                          # 路由表看不到但实际存在的网段（Harbor/存储/运维）
 
@@ -51,16 +51,16 @@ gw_http_redirect: false                 # true 时创建 80→443 的 301 跳转
 etcd_quota_bytes: 4294967296            # 4G；2147483648 为 2G（etcd 默认）
 
 ## Ansible 行为开关（实施方案 §4）
-worker_batch_size: 10                   # 阶段 70 每批 worker 数
+worker_batch_size: 10                   # join-workers 每批 worker 数
 artifact_source: file_url               # file_url=节点从文件站下载（默认）；repo=控制机从本仓库 artifacts/ 推送
-pin_kernel: false                       # 阶段 11 总开关，true 才执行（会重启节点，单独执行）
-purge_old_kernels: false                # 清理旧内核开关（阶段 11 ④）
+pin_kernel: false                       # kernel-pin 总开关，true 才执行（会重启节点，单独执行）
+purge_old_kernels: false                # 清理旧内核开关（kernel-pin ④）
 nftables_stop_if_idle: false            # 见 os_baseline；默认不动该服务
 journald_system_max_use: 4G
 preload_images: []                      # worker 预拉业务镜像（原 IMAGE_LIST），如 ["demo.example/app:v1.0"]
-busybox_tag: ""                         # 阶段 90 连通性测试镜像 tag；为空则跳过该测试
+busybox_tag: ""                         # verify 连通性测试镜像 tag；为空则跳过该测试
 
-## Release.key 校验值（上传公钥到文件站时登记，阶段 40 核对；为空则跳过指纹断言）
+## Release.key 校验值（上传公钥到文件站时登记，k8s_packages 核对；为空则跳过指纹断言）
 k8s_release_key_sha256: ""
 k8s_release_key_fingerprint: ""
 
