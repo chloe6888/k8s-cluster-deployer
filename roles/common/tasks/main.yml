@@ -1,15 +1,4 @@
 ---
-# 公共事实：node_name 由 cluster_prefix + 主机名拼出（与手册 ${CLUSTER_PREFIX}-k8s-master0N 一致）
-- name: Compute the node name
-  ansible.builtin.set_fact:
-    node_name: "{{ cluster_prefix }}-{{ inventory_hostname }}"
-
-- name: Assert node vars are explicitly set in host_vars
-  ansible.builtin.assert:
-    that:
-      - node_ip is defined and node_ip != ''
-      - node_ext_ip is defined and node_ext_ip != ''
-    fail_msg: >-
-      {{ inventory_hostname }} 缺少 node_ip / node_ext_ip：必须显式写入 host_vars，
-      不要用 ansible_default_ipv4（默认路由在外网网卡，会取到外网 IP）。
-    quiet: true
+# 公共 role：每个阶段的 playbook 都先带上它（roles: [common, <阶段 role>]）。
+- name: Import the install tasks
+  ansible.builtin.import_tasks: install.yml

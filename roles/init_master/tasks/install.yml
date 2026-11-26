@@ -1,0 +1,115 @@
+---
+# k8s-master01 初始化。kubeconfig 只用 /etc/kubernetes/admin.conf，不依赖 ~/.kube。
+# helm 的安装不在本文件：它与集群初始化无关，放在工具阶段（Calico 阶段之前、仅 first_master）。
+- name: Initialize k8s-master01
+  tags: [kubeadm]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    - name: Create /etc/kubeadm
+      ansible.builtin.file:
+        path: /etc/kubeadm
+        state: directory
+        mode: "0755"
+
+    # v1beta4
+    - name: Render the kubeadm init configuration
+      ansible.builtin.template:
+        src: kubeadm-init.yml.j2
+        dest: /etc/kubeadm/kubeadm-init.yml
+        mode: "0600"
+
+    # 渲染完先过 kubeadm 自己的校验
+    - name: Validate the configuration (kubeadm config validate)
+      ansible.builtin.command:
+        cmd: kubeadm config validate --config /etc/kubeadm/kubeadm-init.yml
+      changed_when: false
+      check_mode: false
+
+    # kubeadm 经 controlPlaneEndpoint（VIP:端口）访问 apiserver，HAProxy 必须已在监听
+    # 此时后端 apiserver 未起，连接被后端断开属正常；监听不到才是链路不通
+    - name: Wait for the control plane endpoint to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ vip }}"
+        port: "{{ vip_port }}"
+        timeout: 30
+      check_mode: false
+
+    # 以 apiserver 中是否存在 kubeadm-config 判断是否已初始化（不用 admin.conf 是否存在：
+    # admin.conf 在 init 早期就已写出，init 中途失败时会被误判为已初始化）
+    # 半初始化时返回非 0，init 会重跑并在 preflight 报"文件已存在"，此时应先执行 reset 阶段
+    - name: Check whether the cluster is already initialized
+      ansible.builtin.command:
+        cmd: kubectl -n kube-system get configmap kubeadm-config
+      register: init_cluster_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # 失败=Harbor 缺镜像，立即停止；镜像已存在时拉取无变化，记 false
+    - name: Pull the K8s system images
+      when: init_cluster_state.rc != 0
+      ansible.builtin.command:
+        cmd: kubeadm config images pull --config /etc/kubeadm/kubeadm-init.yml
+      changed_when: false
+
+    # 输出含 join token，但 token 24h 过期且 join 阶段会重新生成；
+    # 不加 no_log，保证失败时能直接看到原因
+    - name: Run kubeadm init
+      when: init_cluster_state.rc != 0
+      ansible.builtin.command:
+        cmd: kubeadm init --config /etc/kubeadm/kubeadm-init.yml
+      changed_when: true
+
+    # 验证 v1beta4 的有效期字段确实生效：19 年后仍有效（599184000 = 19 × 365 × 86400 秒）
+    - name: Verify the certificate validity period
+      ansible.builtin.command:
+        cmd: openssl x509 -in /etc/kubernetes/pki/{{ item }}.crt -noout -checkend 599184000
+      loop: [ca, apiserver]
+      changed_when: false
+      check_mode: false
+
+    - name: Create /root/.kube
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+
+    - name: Install admin.conf as /root/.kube/config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        mode: "0600"
+        remote_src: true
+
+    # 门禁（流程内等待，不打 verify）：4 个 static pod 全 Running 才放行后续阶段
+    # 此时没有 CNI，节点为 NotReady、CoreDNS 为 Pending 属正常，不在这里等
+    - name: Wait for the four static pods to be Running
+      ansible.builtin.command:
+        cmd: >-
+          kubectl -n kube-system get pods --field-selector spec.nodeName={{ node_name }}
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+      register: init_static_pods
+      until:
+        - init_static_pods.stdout is search('etcd-' ~ node_name ~ '\s+Running')
+        - init_static_pods.stdout is search('kube-apiserver-' ~ node_name ~ '\s+Running')
+        - init_static_pods.stdout is search('kube-controller-manager-' ~ node_name ~ '\s+Running')
+        - init_static_pods.stdout is search('kube-scheduler-' ~ node_name ~ '\s+Running')
+      retries: 30
+      delay: 10
+      changed_when: false
+      check_mode: false
+
+    # admin.conf 指向 VIP，这一步同时验证 keepalived + HAProxy 到 apiserver 的整条链路
+    - name: Wait for the API server to be ready through the endpoint
+      ansible.builtin.command:
+        cmd: kubectl get --raw=/readyz
+      register: init_readyz
+      until: init_readyz.stdout == 'ok'
+      retries: 30
+      delay: 10
+      changed_when: false
+      check_mode: false

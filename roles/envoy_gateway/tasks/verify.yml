@@ -1,0 +1,35 @@
+---
+# 阶段 81 验证：只读核对入口 IP 与数据面镜像来源（手册 8.4④）。
+- name: Verify Envoy Gateway
+  tags: [gateway, verify]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 手册 8.4④：Service 必须从 MetalLB 地址池拿到预定 IP
+    - name: Verify the Envoy Service got {{ gw_ext_ip }}
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kubectl get svc -n envoy-gateway-system -o json \
+            | grep -o '"loadBalancerIP": *"[^"]*"\|"ip": *"{{ gw_ext_ip }}"'
+      register: gw_svc_ip
+      changed_when: false
+      failed_when: gw_svc_ip.stdout is not search(gw_ext_ip | regex_escape)
+      check_mode: false
+
+    # 手册 8.4④：数据面由 EnvoyProxy 自建 Deployment，镜像不查会绕过离线仓库
+    - name: Re-verify data-plane images (every envoy container points at {{ registry }})
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kubectl -n envoy-gateway-system get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}' \
+            | tr ' ' '\n' | sort -u
+      register: gw_dp_images
+      changed_when: false
+      failed_when: >-
+        gw_dp_images.stdout_lines | length == 0
+        or (gw_dp_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
+      check_mode: false

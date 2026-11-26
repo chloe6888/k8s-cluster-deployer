@@ -1,47 +1,6 @@
 ---
-# 阶段 99：重置集群（独立执行：ansible-playbook playbooks/reset.yml -e confirm_reset=yes）。
-# 双确认：命令行必须显式传 confirm_reset=yes；HA（haproxy/keepalived）与系统基线不动。
-- name: Require explicit reset confirmation
-  ansible.builtin.assert:
-    that: (confirm_reset | default('')) == 'yes'
-    fail_msg: >-
-      重置会删除整个集群（etcd 数据不可恢复）。
-      确认请加 "-e confirm_reset=yes" 重新执行；任何其他值一律拒绝。
-
-- name: Run kubeadm reset (succeeds on uninitialized nodes too)
-  ansible.builtin.command:
-    cmd: kubeadm reset -f
-  register: reset_rc
-  changed_when: "'[reset]' in reset_rc.stdout"
-  failed_when: false
-
-- name: Remove leftover directories (/etc/kubernetes, etcd, kubelet, CNI, kubeconfig)
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /etc/kubernetes
-    - /var/lib/etcd
-    - /var/lib/kubelet
-    - /var/lib/calico
-    - /etc/cni
-    - /root/.kube
-    - /var/lib/cni
-
-- name: Remove only the kube-proxy nft table (leave others; skip if absent)
-  ansible.builtin.shell: nft list table kube-proxy >/dev/null 2>&1 && nft delete table kube-proxy || true
-  args:
-    executable: /bin/bash
-  register: reset_nft
-  changed_when: "'}' in reset_nft.stdout"
-
-- name: Stop kubelet (images and packages kept so the node can rejoin)
-  ansible.builtin.systemd:
-    name: kubelet
-    state: stopped
-
-- name: Report reset completion
-  ansible.builtin.debug:
-    msg: >-
-      {{ node_name }} 已重置：kubeadm/证书/etcd/CNI 配置已删除，kube-proxy nft 表已清理。
-      软件包与 HA（haproxy/keepalived）保留；如需彻底下线节点请另行处理。
+# 阶段 99：重置集群（never 标签，独立执行）：
+# ansible-playbook playbooks/reset.yml --tags reset -e confirm_reset=yes
+# 双确认：既要点 --tags reset，又要显式传 confirm_reset=yes；HA 与系统基线不动。
+- name: Import the reset tasks
+  ansible.builtin.import_tasks: reset.yml

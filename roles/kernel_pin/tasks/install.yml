@@ -1,0 +1,184 @@
+---
+# 阶段 11：固定并锁定内核（手册 2.5），全部节点（master 逐台 / worker 分批由 playbook serial 控制）。
+# 危险操作（装内核、重启、清内核），按规范打 never：默认跳过，显式 --tags os 才执行。
+- name: Pin the kernel
+  tags: [os, never]
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 手册 2.5①：内网镜像站必须有候选版本
+    - name: Assert the target kernel candidate exists on the internal mirror
+      ansible.builtin.command:
+        cmd: apt-cache policy linux-image-{{ kernel_version }}
+      register: kernel_policy
+      changed_when: false
+      failed_when: kernel_policy.stdout is search('Candidate:[ ]+\\(none\\)')
+      check_mode: false
+
+    # 手册 2.5①
+    - name: Install the four target kernel packages
+      ansible.builtin.apt:
+        name:
+          - "linux-image-{{ kernel_version }}"
+          - "linux-headers-{{ kernel_version }}"
+          - "linux-modules-{{ kernel_version }}"
+          - "linux-modules-extra-{{ kernel_version }}"
+        state: present
+        update_cache: false
+      register: kernel_install
+
+    # 手册 2.5①：缺任何一个都不能重启
+    - name: Verify vmlinuz and initrd.img exist under /boot
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "/boot/vmlinuz-{{ kernel_version }}"
+        - "/boot/initrd.img-{{ kernel_version }}"
+      register: kernel_boot_files
+      failed_when: not kernel_boot_files.results[idx].stat.exists
+      loop_control:
+        index_var: idx
+
+    - name: Read the running kernel
+      ansible.builtin.command:
+        cmd: uname -r
+      register: kernel_uname
+      changed_when: false
+      check_mode: false
+
+    # 手册 2.5②：当前内核不是目标内核才固定 GRUB 并重启
+    - name: Pin the GRUB entry and reboot
+      when: kernel_uname.stdout | trim != kernel_version
+      block:
+        - name: Ensure no grub.d file overrides GRUB_DEFAULT
+          ansible.builtin.command:
+            cmd: grep -rn GRUB_DEFAULT /etc/default/grub /etc/default/grub.d/
+          register: kernel_grub_override
+          changed_when: false
+          failed_when: (kernel_grub_override.stdout_lines | select('match', '^/etc/default/grub\.d/') | list | length) > 0
+          check_mode: false
+
+        # 确保目标内核进入菜单，下面的固定才有效
+        - name: Update grub (target kernel must enter the menu)
+          ansible.builtin.command:
+            cmd: update-grub
+          changed_when: false
+
+        - name: Verify the target kernel title is in the menu
+          ansible.builtin.command:
+            cmd: grep -n "with Linux {{ kernel_version }}'" /boot/grub/grub.cfg
+          register: kernel_menu_entry
+          changed_when: false
+          failed_when: kernel_menu_entry.rc != 0
+          check_mode: false
+
+        - name: Pin GRUB_DEFAULT to the target kernel entry
+          ansible.builtin.lineinfile:
+            path: /etc/default/grub
+            regexp: '^GRUB_DEFAULT='
+            line: 'GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux {{ kernel_version }}"'
+
+        - name: Update grub again
+          ansible.builtin.command:
+            cmd: update-grub
+          changed_when: false
+
+        # batch 内逐台由 playbook 的 serial 保证
+        - name: Reboot the node
+          ansible.builtin.reboot:
+            reboot_timeout: 600
+            pre_reboot_delay: 5
+
+        - name: Verify the running kernel after reboot
+          ansible.builtin.command:
+            cmd: uname -r
+          register: kernel_uname_after
+          changed_when: false
+          failed_when: kernel_uname_after.stdout | trim != kernel_version
+          check_mode: false
+
+    # 手册 2.5④：清理其余内核（仅显式开启才做）
+    - name: Purge other kernels
+      when: purge_old_kernels | bool
+      block:
+        # 运行中的目标内核不会被卸载
+        - name: Build the list of packages to remove
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              dpkg -l | awk '/^ii  linux-(image|image-unsigned|headers|modules|modules-extra)-[0-9]/ {print $2}' \
+                | grep -v -- "{{ kernel_version.rsplit('-', 1)[0] }}" || true
+          register: kernel_purge_list
+          changed_when: false
+          check_mode: false
+
+        - name: Show the removal list for review
+          ansible.builtin.debug:
+            msg: "{{ kernel_purge_list.stdout_lines or ['（无待移除内核包）'] }}"
+
+        - name: Assert the list excludes kubelet, containerd and other unrelated packages
+          ansible.builtin.assert:
+            that: kernel_purge_list.stdout_lines | reject('match', '^linux-') | list | length == 0
+            fail_msg: "待移除清单出现非 linux-* 包，中止：{{ kernel_purge_list.stdout_lines }}"
+            quiet: true
+
+        - name: Remove old kernels
+          ansible.builtin.apt:
+            name: "{{ kernel_purge_list.stdout_lines }}"
+            state: absent
+            purge: true
+          when: kernel_purge_list.stdout_lines | length > 0
+
+        - name: Restore GRUB_DEFAULT=0 when only one kernel remains
+          ansible.builtin.lineinfile:
+            path: /etc/default/grub
+            regexp: '^GRUB_DEFAULT='
+            line: GRUB_DEFAULT=0
+          notify: Update grub
+
+        - name: Verify /boot contains only the target kernel
+          ansible.builtin.command:
+            cmd: ls /boot/vmlinuz-*
+          register: kernel_boot_left
+          changed_when: false
+          failed_when: kernel_boot_left.stdout_lines | length != 1 or kernel_version not in kernel_boot_left.stdout
+          check_mode: false
+
+    # 手册 2.5⑤：锁定四个版本内核包
+    - name: Hold the four kernel packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - "linux-image-{{ kernel_version }}"
+        - "linux-headers-{{ kernel_version }}"
+        - "linux-modules-{{ kernel_version }}"
+        - "linux-modules-extra-{{ kernel_version }}"
+
+    # 手册 2.5⑤：元包过滤需要已安装包信息
+    - name: Collect installed package facts for meta-package filtering
+      ansible.builtin.package_facts:
+
+    - name: Hold installed kernel meta-packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ kernel_meta_packages }}"
+      when: ansible_facts.packages[item] is defined
+
+    # 手册 2.5⑥：防内核与包被自动升级打破锁定
+    - name: Disable auto-upgrades (set 20auto-upgrades to 0)
+      ansible.builtin.lineinfile:
+        path: /etc/apt/apt.conf.d/20auto-upgrades
+        regexp: '^\s*Unattended-Upgrade\s'
+        line: 'Unattended-Upgrade "0";'
+        create: true
+        mode: "0644"
+
+    - name: Stop and disable unattended-upgrades and apt-daily-upgrade.timer
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [unattended-upgrades, apt-daily-upgrade.timer]

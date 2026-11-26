@@ -1,0 +1,16 @@
+---
+# 阶段 80 验证：只读核对外网地址池与 L2 广告存在（手册 7.3）。
+- name: Verify MetalLB
+  tags: [lb, verify]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  block:
+    # 手册 7.3：两个自定义资源都创建出来才算池子生效
+    - name: Verify pool-ext and l2-ext exist
+      ansible.builtin.command:
+        cmd: kubectl -n metallb-system get ipaddresspool,l2advertisement
+      register: lb_pool
+      changed_when: false
+      failed_when: >-
+        lb_pool.stdout is not search('pool-ext') or lb_pool.stdout is not search('l2-ext')
+      check_mode: false

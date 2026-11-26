@@ -1,16 +1,19 @@
 ---
-# 跳过与实施方案约定相悖的风格规则（见 docs/ansible-implementation.md「工程骨架与约定」）：
-# - command-instead-of-module：方案明确 kubectl/helm/systemctl 探测一律走 command，不用 kubernetes.core
+# 任务书写规范见 docs/ansible-task-style.md（第 9 节），CI 与本地都跑 ansible-lint + yamllint
+profile: production
+exclude_paths:
+  - collections/
+  - artifacts/
+
+# 跳过与实施方案约定相悖的规则（每条都要有理由，规范落地后逐条收回）：
+# - command-instead-of-module：方案明确 kubectl/helm/kubeadm/nerdctl 一律走 command，不用 kubernetes.core
 # - risky-shell-pipe：管道多为 grep/awk 组合，rc 语义由 failed_when 显式接管（部分管道故意不吃 pipefail）
-# - var-naming[no-role-prefix]：register 用角色缩写前缀（vf_/jm_/jw_/pkg_…），不强制全角色名前缀
+# - var-naming[no-role-prefix]：register 用角色缩写前缀（vf_/jm_/jw_/pkg_ 等），不强制全角色名前缀
 # - no-handler：两处"变更后才执行"的服务操作（首次安装即停、sysctl --system）依赖即时顺序，不能延迟到 play 末尾
-# - key-order[task]：纯排序风格
 skip_list:
   - command-instead-of-module
   - risky-shell-pipe
   - var-naming[no-role-prefix]
   - no-handler
-  - key-order[task]
 
-# 80 个文件含大量中文注释与模板，行长放宽到 160（默认 160 已够，个别折行已处理）
 warn_list: []

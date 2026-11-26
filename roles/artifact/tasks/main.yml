@@ -1,117 +1,14 @@
 ---
 # 公共任务：把离线安装文件获取到节点 {{ package_dir }}/ 并校验（实施方案 §2 约定 5）。
-# 用法：
-#   - include_role: { name: artifact }
-#     vars: { artifact_file: containerd-2.3.0-linux-amd64.tar.gz }        # 单文件
-#     vars: { artifact_files: [a, b] }                                    # 多文件
+# 用法（标准写法 import_role，标签随调用方继承）：
+#   - name: Fetch the Calico charts
+#     ansible.builtin.import_role:
+#       name: artifact
+#     vars:
+#       artifact_files: [a, b]
 # 两种来源：
 #   artifact_source=file_url（默认）：节点从内网文件站下载，get_url 按 SHA256SUMS 校验（展平文件名）
 #   artifact_source=repo              ：控制机按本仓库 artifacts/checksums/SHA256SUMS 校验后推送
 # 校验失败即中止（get_url 的 checksum 参数 / sha256sum -c 失败都非零退出）。
-
-- name: Normalize the artifact file list
-  ansible.builtin.set_fact:
-    artifact_list: "{{ (artifact_files | default([])) + ([artifact_file] if (artifact_file | default('')) != '' else []) }}"
-
-- name: Assert the artifact list is not empty
-  ansible.builtin.assert:
-    that: artifact_list | length > 0
-    fail_msg: "artifact role 需要通过 artifact_file 或 artifact_files 指定至少一个文件"
-    quiet: true
-
-- name: Ensure the node work directory exists
-  ansible.builtin.file:
-    path: "{{ package_dir }}"
-    state: directory
-    mode: "0755"
-
-- name: File-station mode
-  when: artifact_source == 'file_url'
-  block:
-    - name: Download SHA256SUMS  # 决策 #25：条目为展平文件名
-      ansible.builtin.get_url:
-        url: "{{ file_url }}/SHA256SUMS"
-        dest: "{{ package_dir }}/SHA256SUMS"
-        mode: "0644"
-
-    - name: Extract the checksum of each file
-      ansible.builtin.command:
-        cmd: "awk -v f={{ item }} '$2==f {print $1}' {{ package_dir }}/SHA256SUMS"
-      loop: "{{ artifact_list }}"
-      loop_control: { label: "{{ item }}" }
-      register: artifact_sums
-      changed_when: false
-
-    - name: Assert checksums exist and are well-formed  # 手册 1.6
-      ansible.builtin.assert:
-        that:
-          - item.stdout | length == 64
-          - item.stdout is match('^[0-9a-f]{64}$')
-        fail_msg: >-
-          SHA256SUMS 中找不到 {{ artifact_list[idx] }} 的条目（或格式错误）。
-          文件站 {{ file_url }} 的清单须覆盖手册 1.6 全部文件（展平文件名，决策 #25）。
-        quiet: true
-      loop: "{{ artifact_sums.results }}"
-      loop_control:
-        label: "{{ artifact_list[idx] }}"
-        index_var: idx
-
-    - name: Download files with checksum verification
-      ansible.builtin.get_url:
-        url: "{{ file_url }}/{{ artifact_list[idx] }}"
-        dest: "{{ package_dir }}/{{ artifact_list[idx] }}"
-        checksum: "sha256:{{ item.stdout }}"
-        mode: "0644"
-        timeout: 300
-      loop: "{{ artifact_sums.results }}"
-      loop_control:
-        label: "{{ artifact_list[idx] }}"
-        index_var: idx
-      register: artifact_downloaded
-
-- name: Repository mode
-  when: artifact_source == 'repo'
-  block:
-    - name: Map flat names to repository paths
-      ansible.builtin.set_fact:
-        artifact_repo_map: "{{ artifact_repo_map_defaults | combine(artifact_repo_map_extra | default({})) }}"
-
-    - name: Assert every file is in the mapping
-      ansible.builtin.assert:
-        that: item in artifact_repo_map
-        fail_msg: "文件 {{ item }} 不在 artifact_repo_map 映射表内，无法从仓库推送；请补映射或改用 artifact_source=file_url"
-        quiet: true
-      loop: "{{ artifact_list }}"
-      loop_control: { label: "{{ item }}" }
-
-    - name: Verify against the repository SHA256SUMS
-      ansible.builtin.command:
-        cmd: "sha256sum -c --ignore-missing {{ artifact_repo_map[item] }}"
-      args:
-        chdir: "{{ playbook_dir }}/../artifacts"
-      loop: "{{ artifact_list }}"
-      loop_control: { label: "{{ item }}" }
-      when: artifact_repo_map[item] is match('^artifacts/')
-      delegate_to: localhost
-      run_once: true
-      changed_when: false
-      register: artifact_repo_verify
-
-    - name: Assert repository verification passed
-      ansible.builtin.assert:
-        that: item.rc is defined and item.rc == 0
-        fail_msg: "{{ artifact_list[idx] }} 在控制机校验失败（artifacts/checksums/SHA256SUMS）"
-        quiet: true
-      loop: "{{ artifact_repo_verify.results | selectattr('rc', 'defined') | list }}"
-      loop_control:
-        label: "{{ artifact_list[idx] }}"
-        index_var: idx
-      run_once: true
-
-    - name: Push files to the node
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../{{ artifact_repo_map[item] }}"
-        dest: "{{ package_dir }}/{{ item }}"
-        mode: "0644"
-      loop: "{{ artifact_list }}"
-      loop_control: { label: "{{ item }}" }
+- name: Import the install tasks
+  ansible.builtin.import_tasks: install.yml

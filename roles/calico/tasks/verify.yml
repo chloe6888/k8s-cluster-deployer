@@ -1,0 +1,28 @@
+---
+# 阶段 60 验证：只读展示节点与 calico-node Pod（operator 模式下在 calico-system 命名空间）。
+- name: Verify Calico
+  tags: [cni, verify]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  block:
+    - name: Show the node status
+      ansible.builtin.command:
+        cmd: kubectl get nodes -o wide
+      register: calico_nodes
+      changed_when: false
+      check_mode: false
+
+    - name: Print the node status
+      ansible.builtin.debug:
+        var: calico_nodes.stdout_lines
+
+    - name: Get the calico-node pods
+      ansible.builtin.command:
+        cmd: kubectl -n calico-system get pods -l k8s-app=calico-node -o wide
+      register: calico_pods
+      changed_when: false
+      check_mode: false
+
+    - name: Show the calico-node pods
+      ansible.builtin.debug:
+        var: calico_pods.stdout_lines

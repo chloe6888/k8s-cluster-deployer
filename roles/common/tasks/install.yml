@@ -1,0 +1,20 @@
+---
+# 阶段通用：节点名拼装 + host_vars 显式性断言。所有 --tags 选择下都必须先执行，故打 always。
+- name: Prepare the common node facts
+  tags: [always]
+  block:
+    # node_name 不单独存变量，由 cluster_prefix + 主机名拼出（与手册 ${CLUSTER_PREFIX}-k8s-master0N 一致）
+    - name: Compute the node name
+      ansible.builtin.set_fact:
+        node_name: "{{ cluster_prefix }}-{{ inventory_hostname }}"
+
+    # 不用 ansible_default_ipv4：默认路由在外网网卡，会取到外网 IP
+    - name: Assert node vars are explicitly set in host_vars
+      ansible.builtin.assert:
+        that:
+          - node_ip is defined and node_ip != ''
+          - node_ext_ip is defined and node_ext_ip != ''
+        fail_msg: >-
+          {{ inventory_hostname }} 缺少 node_ip / node_ext_ip：必须显式写入 host_vars，
+          不要用 ansible_default_ipv4（默认路由在外网网卡，会取到外网 IP）。
+        quiet: true

@@ -1,0 +1,295 @@
+---
+# 阶段 90：验收检查（手册 9.1）。节点级检查在每台节点本机，集群级检查委托 master01。
+- name: Run the acceptance checks
+  tags: [verify]
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    - name: Initialize the failure summary
+      ansible.builtin.set_fact:
+        verify_failures: []
+        verify_node: "{{ node_name }}"
+
+    # ===================== 节点级检查（每台节点本机）=====================
+    - name: Check node-level items
+      block:
+        # 手册 9.1：只有固定过内核的集群才核对内核版本
+        - name: Check the kernel version
+          when: pin_kernel | bool
+          block:
+            - name: Read uname -r
+              ansible.builtin.command:
+                cmd: uname -r
+              register: vf_uname
+              changed_when: false
+              check_mode: false
+
+            - name: Record a kernel mismatch
+              when: (vf_uname.stdout | trim) != kernel_version
+              ansible.builtin.set_fact:
+                verify_failures: "{{ verify_failures + [verify_node ~ ' 内核 ' ~ (vf_uname.stdout | trim) ~ ' != ' ~ kernel_version] }}"
+
+        - name: Read the hold list
+          ansible.builtin.command:
+            cmd: apt-mark showhold
+          register: vf_holds
+          changed_when: false
+          check_mode: false
+
+        - name: Record unheld K8s packages
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + [verify_node ~ ' 未 hold: ' ~ item] }}"
+          loop: "{{ ['kubelet', 'kubeadm', 'kubectl', 'cri-tools'] | difference(vf_holds.stdout_lines) }}"
+
+        - name: Read the inotify parameters
+          ansible.builtin.command:
+            cmd: sysctl -n fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events
+          register: vf_inotify
+          changed_when: false
+          check_mode: false
+
+        - name: Record inotify mismatches
+          when: vf_inotify.stdout | trim != '8192\n1048576\n65536'
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + [verify_node ~ ' inotify: ' ~ (vf_inotify.stdout | trim | replace('\n', ' '))] }}"
+
+        - name: Read the journald SystemMaxUse
+          ansible.builtin.command:
+            cmd: grep SystemMaxUse /etc/systemd/journald.conf.d/10-k8s-node.conf
+          register: vf_journald
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record a journald mismatch
+          when: vf_journald.rc != 0 or vf_journald.stdout is not search(journald_system_max_use)
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + [verify_node ~ ' journald SystemMaxUse 不符: ' ~ (vf_journald.stdout | default('缺失'))] }}"
+
+        - name: Verify swap is disabled
+          ansible.builtin.command:
+            cmd: cat /proc/swaps
+          register: vf_swaps
+          changed_when: false
+          check_mode: false
+
+        - name: Record that swap still exists
+          when: (vf_swaps.stdout_lines | length) > 1
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + [verify_node ~ ' swap 未关闭'] }}"
+
+        # 手册 9.1：证书年限修订后叶子 ~10 年 / CA ~20 年
+        - name: Check master certificate lifetimes
+          when: inventory_hostname in groups['masters']
+          block:
+            - name: Run kubeadm certs check-expiration
+              ansible.builtin.command:
+                cmd: kubeadm certs check-expiration
+              register: vf_certs
+              changed_when: false
+              failed_when: false
+              check_mode: false
+
+            - name: Record certificate check errors
+              when: vf_certs.rc != 0
+              ansible.builtin.set_fact:
+                verify_failures: "{{ verify_failures + [verify_node ~ ' 证书检查异常（rc=' ~ vf_certs.rc ~ '）'] }}"
+
+            - name: Print certificate lifetime details
+              ansible.builtin.debug:
+                msg: "{{ vf_certs.stdout_lines | default([]) }}"
+
+    # ===================== 集群级检查（全部委托 master01）=====================
+    - name: Check cluster-level items
+      block:
+        - name: Verify every node is Ready
+          ansible.builtin.command:
+            cmd: kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_nodes
+          changed_when: false
+          check_mode: false
+
+        - name: Record nodes that are not Ready
+          when: (vf_nodes.stdout_lines | reject('equalto', 'True')) | list | length > 0
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['未 Ready 节点 ' ~ ((vf_nodes.stdout_lines | reject('equalto', 'True')) | list | length) ~ ' 台'] }}"
+          run_once: true
+
+        # 手册 9.1：INTERNAL-IP 若是 VIP，说明 node-ip 固定没生效，双网卡场景必查
+        - name: Verify node INTERNAL-IP is the internal IP
+          ansible.builtin.command:
+            cmd: kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_node_ips
+          changed_when: false
+          check_mode: false
+
+        - name: Record INTERNAL-IP anomalies
+          when: item in vf_node_ips.stdout_lines
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['节点 INTERNAL-IP 含 ' ~ item ~ '（应为各节点内网 IP）'] }}"
+          loop: "{{ [vip, ext_vip] }}"
+          run_once: true
+
+        - name: Verify system pods are Running or Completed
+          ansible.builtin.command:
+            cmd: kubectl get pods -A -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_pods
+          changed_when: false
+          check_mode: false
+
+        - name: Record abnormal system pods
+          when: (vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length > 0
+          ansible.builtin.set_fact:
+            verify_failures: >-
+              {{ verify_failures + ['非 Running/Succeeded Pod '
+              ~ ((vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length) ~ ' 个'] }}
+          run_once: true
+
+        # 手册 9.1：离线纯度——任何一个镜像不来自内网仓库都算破坏离线承诺
+        - name: Verify offline purity, every image comes from {{ registry }}
+          ansible.builtin.command:
+            cmd: kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_images
+          changed_when: false
+          check_mode: false
+
+        - name: Record images outside the internal registry
+          when: (vf_images.stdout_lines | unique | reject('search', registry | regex_escape)) | list | length > 0
+          ansible.builtin.set_fact:
+            verify_failures: >-
+              {{ verify_failures + ['公网/未知镜像: '
+              ~ ((vf_images.stdout_lines | unique | reject('search', registry | regex_escape)) | list | join(', '))] }}
+          run_once: true
+
+        - name: Check apiserver readyz
+          ansible.builtin.command:
+            cmd: kubectl get --raw=/readyz?verbose
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_readyz
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record readyz anomalies
+          when: vf_readyz.rc != 0 or not (vf_readyz.stdout | default('') is search('readyz check passed'))
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['readyz 未通过: ' ~ (vf_readyz.stdout | default('') | trim | splitlines() | last | default(''))] }}"
+          run_once: true
+
+        - name: Check kube-proxy nftables mode and nodePortAddresses
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              kubectl -n kube-system get cm kube-proxy -o yaml | grep -E 'mode:|nodePortAddresses' -A1
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_kubeproxy
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record kube-proxy configuration anomalies
+          when: vf_kubeproxy.rc != 0 or vf_kubeproxy.stdout is not search('nftables') or vf_kubeproxy.stdout is not search(node_cidr | regex_escape)
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['kube-proxy 配置异常（期望 nftables + ' ~ node_cidr ~ '）'] }}"
+          run_once: true
+
+        # 手册 7：条件是 Available（TigeraStatus 没有 Ready 条件）
+        - name: Verify Calico TigerStatus is Available
+          ansible.builtin.command:
+            cmd: kubectl get tigerastatus -o jsonpath='{.items[*].status.conditions[?(@.type=="Available")].status}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_tiger
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record TigerStatus anomalies
+          when: (vf_tiger.stdout | trim).split(' ') | reject('equalto', 'True') | list | length > 0
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['TigerStatus 未全部 Available: ' ~ (vf_tiger.stdout | trim | default(''))] }}"
+          run_once: true
+
+        - name: Check the Calico IPPool
+          ansible.builtin.command:
+            cmd: kubectl get ippools.projectcalico.org default-ipv4-ippool -o jsonpath='{.spec.ipipMode} {.spec.blockSize} {.spec.natOutgoing}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_ippool
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record IPPool anomalies
+          when: vf_ippool.rc != 0 or (vf_ippool.stdout | trim) != 'Always 25 true'
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['IPPool 异常（期望 Always 25 true）: ' ~ (vf_ippool.stdout | trim | default('缺失'))] }}"
+          run_once: true
+
+        - name: Check Gateway PROGRAMMED and EXTERNAL-IP
+          ansible.builtin.shell:
+            cmd: |
+              kubectl -n envoy-gateway-system get gateway gw-ext --no-headers
+              kubectl -n envoy-gateway-system get svc --no-headers
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_gw
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record Gateway or entry IP anomalies
+          when: vf_gw.rc != 0 or vf_gw.stdout is not search('True') or vf_gw.stdout is not search(gw_ext_ip | regex_escape)
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['Gateway 或入口 IP 异常（期望 Programmed+True / ' ~ gw_ext_ip ~ '）'] }}"
+          run_once: true
+
+        - name: Check etcd cluster health
+          ansible.builtin.shell:
+            cmd: >-
+              crictl exec "$(crictl ps --name etcd -q | head -n1)"
+              etcdctl --endpoints=https://127.0.0.1:2379
+              --cacert=/etc/kubernetes/pki/etcd/ca.crt
+              --cert=/etc/kubernetes/pki/etcd/server.crt
+              --key=/etc/kubernetes/pki/etcd/server.key
+              endpoint health --cluster
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_etcd
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Record unhealthy etcd members
+          when: vf_etcd.rc != 0 or (vf_etcd.stdout_lines | reject('search', 'is healthy')) | list | length > 0
+          ansible.builtin.set_fact:
+            verify_failures: "{{ verify_failures + ['etcd 不健康成员 ' ~ ((vf_etcd.stdout_lines | reject('search', 'is healthy')) | list | length) ~ ' 个'] }}"
+          run_once: true
+
+    # ===================== 汇总 =====================
+    - name: Summarize the verification
+      ansible.builtin.debug:
+        msg: >-
+          {{ '%s 验收 %s' | format(verify_node, '通过 ✓' if (verify_failures | length) == 0 else '存在 ' ~ (verify_failures | length) ~ ' 项失败') }}
+
+    - name: List per-node failures
+      when: verify_failures | length > 0
+      ansible.builtin.debug:
+        msg: "{{ verify_failures }}"
+
+    # 手册 5.8：验收不允许半通过
+    - name: Abort on any failure
+      ansible.builtin.assert:
+        that: verify_failures | length == 0
+        fail_msg: 验收未通过，见上方失败清单

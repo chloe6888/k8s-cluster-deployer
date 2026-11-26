@@ -1,0 +1,197 @@
+---
+# 阶段 30：容器运行时（手册 4.1–4.4 + 修订 4 的 Harbor 访问），全部节点并行。
+- name: Install the container runtime
+  tags: [runtime]
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 手册 4.1：获取即校验
+    - name: Fetch the containerd tarball and systemd unit
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_files:
+          - "containerd-{{ containerd_version }}-linux-amd64.tar.gz"
+          - containerd.service
+
+    - name: Read the current containerd version
+      ansible.builtin.command:
+        cmd: containerd --version
+      register: runtime_containerd_ver
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    # 手册 4.1：已是目标版本就不动，避免重复解压产生双版本
+    - name: Extract to /usr/local (bin/* only, avoiding dual versions)
+      when: runtime_containerd_ver.stdout is not search('v' ~ containerd_version ~ '$')
+      ansible.builtin.unarchive:
+        src: "{{ package_dir }}/containerd-{{ containerd_version }}-linux-amd64.tar.gz"
+        dest: /usr/local
+        remote_src: true
+        creates: /usr/local/bin/containerd
+
+    # 手册 4.1：内容同 containerd v2.3.0 官方单元
+    - name: Install the systemd unit
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../templates/systemd/containerd.service.j2"
+        dest: /etc/systemd/system/containerd.service
+        mode: "0644"
+      notify: [Reload systemd, Restart containerd]
+
+    # 手册 4.1：apt 若装过 containerd 会指到 /usr/bin，必须确认唯一入口
+    - name: Assert ExecStart points to /usr/local/bin/containerd
+      ansible.builtin.command:
+        cmd: grep ExecStart /etc/systemd/system/containerd.service
+      register: runtime_unit_exec
+      changed_when: false
+      failed_when: runtime_unit_exec.stdout is not search('/usr/local/bin/containerd')
+      check_mode: false
+
+    - name: Assert only one containerd exists
+      ansible.builtin.command:
+        cmd: which -a containerd
+      register: runtime_which_containerd
+      changed_when: false
+      failed_when: runtime_which_containerd.stdout_lines | length != 1 or runtime_which_containerd.stdout_lines[0] != '/usr/local/bin/containerd'
+      check_mode: false
+
+    # 手册 4.2：只生成一次，后续改动都走 replace（2.3.0 键位以实测为准）
+    - name: Generate the default config.toml only when missing
+      ansible.builtin.shell:
+        cmd: umask 022 && containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    # 手册 4.2 ①：按镜像字符串替换，不依赖键位
+    - name: Point the sandbox image at Harbor
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: '[a-zA-Z0-9._:/-]+/pause:[0-9.]+'
+        replace: "{{ registry }}/pause:{{ pause_version }}"
+      register: runtime_cfg_pause
+
+    # 手册 4.2 ②
+    - name: Enable the systemd cgroup driver
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      register: runtime_cfg_cgroup
+
+    # 手册 4.2 ③；修订 4
+    - name: Point registry config_path at certs.d
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'config_path = ""'
+        replace: 'config_path = "/etc/containerd/certs.d"'
+      register: runtime_cfg_path
+
+    # 手册 4.2：任何一项不符就停——实测后固化为模板
+    - name: Verify the config via containerd config dump
+      ansible.builtin.command:
+        cmd: containerd config dump
+      register: runtime_cfg_dump
+      changed_when: false
+      failed_when: >-
+        runtime_cfg_dump.stdout is not search((registry ~ '/pause:' ~ pause_version) | regex_escape)
+        or runtime_cfg_dump.stdout is not search('SystemdCgroup = true')
+        or runtime_cfg_dump.stdout is not search('config_path = "/etc/containerd/certs.d"')
+      check_mode: false
+
+    # 手册 4.2：配置或运行时变更须重启 containerd 才继续（后续 hosts.toml 依赖运行态）
+    - name: Restart containerd after config or runtime changes
+      ansible.builtin.meta: flush_handlers
+
+    # 手册 4.2；修订 4：逐个 registry 主机配置 certs.d + hosts.toml + CA
+    - name: Configure Harbor access (certs.d + hosts.toml + CA)
+      ansible.builtin.include_tasks: harbor-certs.yml
+      loop: "{{ runtime_registry_hosts }}"
+      loop_control:
+        loop_var: registry_host
+
+    # 手册 4.3
+    - name: Fetch runc
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_files: [runc.amd64, runc.sha256sum]
+
+    # 手册 4.3：grep 无匹配时管道会给 sha256sum 空输入而误报成功，必须 pipefail
+    - name: Verify runc against the upstream checksum list
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          grep ' runc.amd64$' {{ package_dir }}/runc.sha256sum | sha256sum -c -
+      changed_when: false
+      check_mode: false
+
+    # 手册 4.3：apt 版与 /usr/local/sbin 版并存会取错
+    - name: Remove the apt version of runc if present
+      ansible.builtin.apt:
+        name: runc
+        state: absent
+
+    # 手册 4.3
+    - name: Install runc to /usr/local/sbin
+      ansible.builtin.copy:
+        src: "{{ package_dir }}/runc.amd64"
+        dest: /usr/local/sbin/runc
+        mode: "0755"
+      notify: Restart containerd
+
+    # 手册 4.4
+    - name: Fetch nerdctl
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_file: "nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
+
+    # 手册 4.4
+    - name: Extract nerdctl to /usr/local/bin
+      ansible.builtin.unarchive:
+        src: "{{ package_dir }}/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
+        dest: /usr/local/bin
+        remote_src: true
+        creates: /usr/local/bin/nerdctl
+
+    # 手册 4.4
+    - name: Start and enable containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+        enabled: true
+
+    # 修订 14：镜像预检只在 master01 做一次；必需镜像失败立即中止
+    - name: Preflight system images on master01
+      when: inventory_hostname == groups['masters'][0]
+      block:
+        # 拉取属幂等操作（已存在无变化），nerdctl 输出无法稳定区分新旧，保守记 false
+        - name: Pull each required image (nerdctl -n k8s.io)
+          ansible.builtin.command:
+            cmd: nerdctl --namespace k8s.io pull {{ item }}
+          loop: "{{ runtime_required_images }}"
+          loop_control:
+            label: "{{ item }}"
+          register: runtime_pull_required
+          changed_when: false
+          failed_when: runtime_pull_required.rc != 0
+
+        # csi / node-driver-registrar 以安装后实测为准，失败仅提示
+        - name: Pull optional images (failures only warn)
+          ansible.builtin.command:
+            cmd: nerdctl --namespace k8s.io pull {{ item }}
+          loop: "{{ runtime_optional_images }}"
+          loop_control:
+            label: "{{ item }}"
+          register: runtime_pull_optional
+          failed_when: false
+          changed_when: false
+
+        - name: Report missing optional images
+          ansible.builtin.debug:
+            msg: >-
+              可选镜像拉取失败（手册 1.6 注明以实测为准，不中止）：
+              {{ runtime_pull_optional.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+          when: (runtime_pull_optional.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | list) | length > 0

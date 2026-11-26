@@ -1,0 +1,20 @@
+---
+# 阶段 11 验证：只读核对运行内核与 hold 列表（手册 2.5）。
+- name: Verify the pinned kernel
+  tags: [os, verify]
+  block:
+    - name: Read uname and showhold
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop: [uname -r, apt-mark showhold]
+      register: kernel_verify
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the expected kernel and holds
+      ansible.builtin.assert:
+        that:
+          - kernel_verify.results[0].stdout | trim == kernel_version
+          - kernel_verify.results[1].stdout is search('linux-image-' ~ kernel_version)
+          - kernel_verify.results[1].stdout is search('linux-modules-extra-' ~ kernel_version)
+        quiet: true

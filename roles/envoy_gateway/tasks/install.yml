@@ -1,0 +1,207 @@
+---
+# 阶段 81：Envoy Gateway（手册第 8 章；修订 9：Gateway 监听 443）。
+- name: Install Envoy Gateway
+  tags: [gateway]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # metallb 阶段已建 charts 目录，但本阶段单独重跑时也要能自举
+    - name: Create the charts directory
+      ansible.builtin.file:
+        path: "{{ package_dir }}/charts"
+        state: directory
+        mode: "0755"
+
+    # 手册 8.1：获取 Chart（获取即校验）
+    - name: Fetch the Envoy Gateway chart
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_file: "gateway-helm-v{{ envoy_gateway_version }}.tgz"
+
+    # 手册 8.1：global.imageRegistry 覆盖控制面与 certgen
+    - name: Render values
+      ansible.builtin.copy:
+        dest: "{{ package_dir }}/charts/envoy-gateway-values.yaml"
+        mode: "0644"
+        content: |
+          global:
+            imageRegistry: {{ registry }}
+
+    - name: Verify all rendered images point at {{ registry }}
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          helm template eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz \
+            -n envoy-gateway-system -f {{ package_dir }}/charts/envoy-gateway-values.yaml | grep -E 'image:' | sort -u
+      register: gw_images
+      changed_when: false
+      failed_when: >-
+        gw_images.stdout_lines | length == 0
+        or (gw_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
+      check_mode: false
+
+    # 手册 8.2：helm upgrade 每次都产生新 revision，先比较 chart 与 values 再决定是否执行。
+    # chart 版本带不带 v 前缀因发布而异，用 v? 兼容两种
+    - name: Read the current Envoy Gateway release
+      ansible.builtin.command:
+        cmd: helm list -n envoy-gateway-system --filter '^eg$' -o json
+      register: gw_release
+      changed_when: false
+      check_mode: false
+
+    # 手册 8.2：release 不存在时此命令失败，stdout 为空，failed_when: false 放行
+    - name: Read the current Envoy Gateway release values
+      ansible.builtin.command:
+        cmd: helm get values eg -n envoy-gateway-system -o json
+      register: gw_release_values
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # 手册 8.2：--create-namespace；values 只有一层 global.imageRegistry，与期望字典整体比较
+    - name: Install or upgrade Envoy Gateway
+      vars:
+        gw_expected_values:
+          global:
+            imageRegistry: "{{ registry }}"
+      when: >-
+        (gw_release.stdout | from_json | length) == 0
+        or (gw_release.stdout | from_json | first).chart is not search('gateway-helm-v?' ~ envoy_gateway_version ~ '$')
+        or (gw_release_values.stdout | from_json) != gw_expected_values
+      ansible.builtin.command:
+        cmd: >-
+          helm upgrade --install eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz
+          --namespace envoy-gateway-system --create-namespace
+          -f {{ package_dir }}/charts/envoy-gateway-values.yaml
+      changed_when: true
+
+    # 手册 8.2：流程门禁，缺失则 8.3 apply 直接失败
+    - name: Wait for the envoy-gateway control plane
+      ansible.builtin.command:
+        cmd: kubectl wait --timeout=5m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available
+      changed_when: false
+      check_mode: false
+
+    - name: Verify the Gateway API CRDs exist
+      ansible.builtin.command:
+        cmd: kubectl get crd gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io
+      changed_when: false
+      check_mode: false
+
+    # ---- 8.3 EnvoyProxy + GatewayClass ----
+    - name: Render EnvoyProxy and GatewayClass
+      ansible.builtin.template:
+        src: envoy-gatewayclass.yaml.j2
+        dest: "{{ package_dir }}/charts/envoy-gatewayclass.yaml"
+        mode: "0644"
+
+    - name: Apply EnvoyProxy and GatewayClass
+      ansible.builtin.command:
+        cmd: kubectl apply -f {{ package_dir }}/charts/envoy-gatewayclass.yaml
+      register: gw_gc_apply
+      changed_when: "'created' in gw_gc_apply.stdout or 'configured' in gw_gc_apply.stdout"
+
+    # 手册 8.3：Accepted 之后 8.4 的 Gateway 才会被受理
+    - name: Wait for the eg GatewayClass to be Accepted
+      ansible.builtin.command:
+        cmd: kubectl get gatewayclass eg
+      register: gw_gc
+      changed_when: false
+      failed_when: gw_gc.stdout is not search('True')
+      check_mode: false
+
+    # ---- 8.4① TLS Secret（vault 证书 → /dev/shm，用后必删）----
+    - name: TLS Secret
+      when: gw_tls_enabled | bool
+      block:
+        # 手册 8.4①：tmpfs，掉电即失；内容即密钥，整任务 no_log
+        - name: Stage the cert and key in /dev/shm
+          ansible.builtin.copy:
+            dest: "{{ item.dest }}"
+            content: "{{ item.content }}"
+            mode: "0600"
+          no_log: true
+          loop:
+            - dest: /dev/shm/gw-tls.crt
+              content: "{{ gw_tls_cert }}"
+            - dest: /dev/shm/gw-tls.key
+              content: "{{ gw_tls_key }}"
+
+        # 手册 8.4①：证书与私钥配对不上，后面的 Secret 会把问题带到网关层
+        - name: Verify the cert and key match and show cert info
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              openssl x509 -in /dev/shm/gw-tls.crt -noout -subject -enddate -ext subjectAltName
+              test "$(openssl x509 -in /dev/shm/gw-tls.crt -noout -pubkey | sha256sum | awk '{print $1}')" \
+                = "$(openssl pkey -in /dev/shm/gw-tls.key -pubout | sha256sum | awk '{print $1}')"
+          changed_when: false
+          check_mode: false
+
+        # 手册 8.4①：--dry-run=client -o yaml | apply 幂等；输出含证书指纹故 no_log
+        - name: Create or update the kubernetes.io/tls Secret
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              kubectl -n envoy-gateway-system create secret tls {{ gw_tls_secret }} \
+                --cert=/dev/shm/gw-tls.crt --key=/dev/shm/gw-tls.key \
+                --dry-run=client -o yaml | kubectl apply -f -
+          no_log: true
+          register: gw_secret
+          changed_when: "'created' in gw_secret.stdout or 'configured' in gw_secret.stdout"
+
+      always:
+        # 手册 7：凭据落盘即清理，成功失败都删
+        - name: Remove the temporary certs from /dev/shm
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: [/dev/shm/gw-tls.crt, /dev/shm/gw-tls.key]
+
+    # ---- 8.4② Gateway（80 常开；443 仅 TLS 启用时；修订 9）----
+    - name: Render the Gateway
+      ansible.builtin.template:
+        src: envoy-gateway.yaml.j2
+        dest: "{{ package_dir }}/charts/envoy-gateway.yaml"
+        mode: "0644"
+
+    - name: Apply the Gateway
+      ansible.builtin.command:
+        cmd: kubectl apply -f {{ package_dir }}/charts/envoy-gateway.yaml
+      register: gw_apply
+      changed_when: "'created' in gw_apply.stdout or 'configured' in gw_apply.stdout"
+
+    # ---- 8.4③ 可选：80→443 跳转 ----
+    - name: HTTP to HTTPS 301 redirect
+      when: (gw_http_redirect | bool) and (gw_tls_enabled | bool)
+      block:
+        - name: Render http-redirect
+          ansible.builtin.template:
+            src: http-redirect.yaml.j2
+            dest: "{{ package_dir }}/charts/http-redirect.yaml"
+            mode: "0644"
+
+        - name: Apply http-redirect
+          ansible.builtin.command:
+            cmd: kubectl apply -f {{ package_dir }}/charts/http-redirect.yaml
+          register: gw_redirect
+          changed_when: "'created' in gw_redirect.stdout or 'configured' in gw_redirect.stdout"
+
+    # 手册 8.4③：关闭跳转时清掉残留路由，避免继续接管 80 端口未匹配流量
+    - name: Remove the leftover http-to-https when redirect is disabled
+      when: not ((gw_http_redirect | bool) and (gw_tls_enabled | bool))
+      ansible.builtin.command:
+        cmd: kubectl -n envoy-gateway-system delete httproute http-to-https --ignore-not-found
+      register: gw_redirect_del
+      changed_when: "'deleted' in gw_redirect_del.stdout"
+
+    # 手册 8.4④：流程门禁，Programmed 之后 Service 才拿到地址池 IP
+    - name: Wait for the Gateway to be Programmed
+      ansible.builtin.command:
+        cmd: kubectl -n envoy-gateway-system wait --for=condition=Programmed gateway/gw-ext --timeout=5m
+      changed_when: false
+      check_mode: false

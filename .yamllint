@@ -1,0 +1,28 @@
+---
+# 任务书写规范 docs/ansible-task-style.md 第 9 节。
+# 排除项用 ignore:（yamllint ≥1.35 用 GitIgnoreSpec 匹配，exclude_paths 键已不生效）。
+# 四项取值按 ansible-lint 对内嵌 yamllint 的硬性兼容要求放宽/收紧（否则 ansible-lint 拒绝本配置）：
+#   comments.min-spaces-from-content: 1、comments-indentation: false、braces.max-spaces-inside: 1、
+#   octal-values.forbid-implicit-octal / forbid-explicit-octal: true（mode 一律写带引号字符串，不受影响）。
+extends: default
+rules:
+  line-length:
+    max: 160
+  truthy:
+    allowed-values: ["true", "false"]
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: false
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  indentation:
+    indent-sequences: true
+  document-start:
+    present: true
+ignore: |
+  artifacts/
+  collections/
+  .github/

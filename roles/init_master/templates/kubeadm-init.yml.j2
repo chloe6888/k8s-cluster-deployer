@@ -1,49 +1,86 @@
-# kubeadm v1beta4 —— 手册 5.4 + 实施方案修订 2/5/6/7/8
+# kubeadm v1beta4
 # 由 Ansible 渲染，勿手改；重跑阶段 50 幂等（init 由 admin.conf 存在性把关）。
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
 localAPIEndpoint:
-  advertiseAddress: {{ node_ip }}          # 修订 7：apiserver 只通告内网 IP
+  advertiseAddress: {{ node_ip }}          # apiserver 只通告内网 IP
   bindPort: 6443
 nodeRegistration:
   name: {{ node_name }}
-  criSocket: unix:///run/containerd/containerd.sock   # 修订 7：显式声明，不靠探测
-  taints: []                               # 修订 6：业务可调度到 master
+  criSocket: unix:///run/containerd/containerd.sock   # 显式声明，不靠探测
+  imagePullPolicy: IfNotPresent
+  taints: []                               # master 可调度业务，显式清空（不写则 kubeadm 会默认打 control-plane 污点）
   kubeletExtraArgs:
-    node-ip: {{ node_ip }}
+  - name: node-ip                          # 双网卡：显式指定内网 IP
+    value: "{{ node_ip }}"
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
-clusterName: kubernetes
 kubernetesVersion: v{{ kubernetes_version }}
-imageRepository: {{ registry }}            # 离线必备：kubeadm images pull 与静态 Pod 镜像引用都取自此
-controlPlaneEndpoint: {{ vip }}:{{ vip_port }}         # HAProxy 前置 VIP（内外独立漂移）
-# 修订 5：证书 SAN 变量化 —— VIP、外网 VIP、各 master 内网 IP 与节点名
+clusterName: {{ cluster_prefix }}-k8s-prod
+certificatesDir: /etc/kubernetes/pki
+imageRepository: {{ registry }}/google_containers   # 离线必备：images pull 与静态 Pod 镜像引用都取自此
+controlPlaneEndpoint: {{ vip }}:{{ vip_port }}      # HAProxy 前置 VIP
 apiServer:
   certSANs:
-    - {{ vip }}
-    - {{ ext_vip }}
+  - {{ vip }}
+  - {{ ext_vip }}
 {% for h in groups['masters'] %}
-    - {{ hostvars[h]['node_ip'] }}
-    - {{ hostvars[h]['node_name'] }}
+  - {{ hostvars[h]['node_ip'] }}
+  - {{ hostvars[h]['node_name'] }}
 {% endfor %}
-# 决策 #19：叶子证书 10 年（87600h）、CA 20 年（175200h）。
-# 手册 5.4 示例将 175200h 写在 certificateValidityPeriod，系笔误，以此处为准。
-certificateValidityPeriod: 87600h0m0s
-caCertificateValidityPeriod: 175200h0m0s
+{% for san in extra_cert_sans | default([]) %}
+  - {{ san }}
+{% endfor %}
+  - 10.224.26.45                        # NGINX_IP_CLOUD
+  - 10.32.33.99                         # NGINX_IP_MS
+  - localhost
+  - 127.0.0.1
+certificateValidityPeriod: 175200h         # 叶子证书 20 年（默认 8760h）
+caCertificateValidityPeriod: 175200h       # CA 20 年（默认 87600h）
 networking:
-  serviceSubnet: {{ service_cidr }}        # 修订 5：变量化
+  dnsDomain: cluster.local
   podSubnet: {{ pod_cidr }}
+  serviceSubnet: {{ service_cidr }}
 etcd:
   local:
     dataDir: /var/lib/etcd
     extraArgs:
-      quota-backend-bytes: "{{ etcd_quota_bytes }}"
+    - name: quota-backend-bytes
+      value: "{{ etcd_quota_bytes }}"
 ---
-apiVersion: kubeadm.k8s.io/v1beta4
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
 kind: KubeProxyConfiguration
-mode: Nftables        # 决策 #10：1.36 nftables 模式（reset 阶段只清理 kube-proxy 自己的 nft 表）
+mode: nftables
+nodePortAddresses:
+- {{ node_cidr }}                          # NodePort 只在内网监听
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
-cgroupDriver: systemd   # 与 containerd SystemdCgroup=true 对齐
+cgroupDriver: systemd
+maxPods: 110
+kubeReserved:    { cpu: "4", memory: 4Gi }
+systemReserved:  { cpu: "2", memory: 2Gi }
+enforceNodeAllocatable: [pods]
+evictionHard:
+  memory.available: "5%"
+  nodefs.available: "10%"
+  nodefs.inodesFree: "5%"
+  imagefs.available: "10%"
+evictionSoft:
+  memory.available: "10%"
+  nodefs.available: "15%"
+  nodefs.inodesFree: "10%"
+  imagefs.available: "15%"
+evictionSoftGracePeriod:
+  memory.available: 2m
+  nodefs.available: 2m
+  nodefs.inodesFree: 2m
+  imagefs.available: 2m
+evictionMaxPodGracePeriod: 30
+evictionMinimumReclaim:
+  memory.available: 0Mi
+  nodefs.available: 500Mi
+  imagefs.available: 500Mi
+containerLogMaxSize: 50Mi
+containerLogMaxFiles: 5

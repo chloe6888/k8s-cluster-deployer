@@ -1,0 +1,20 @@
+---
+# 阶段 30 验证：只读核对运行时终态（手册 4.1/4.3）。
+- name: Verify the container runtime
+  tags: [runtime, verify]
+  block:
+    - name: Verify containerd is running
+      ansible.builtin.command:
+        cmd: systemctl is-active containerd
+      register: runtime_containerd_active
+      changed_when: false
+      failed_when: runtime_containerd_active.stdout | trim != 'active'
+      check_mode: false
+
+    - name: Verify the runc version is {{ runc_version }}
+      ansible.builtin.command:
+        cmd: runc --version
+      register: runtime_runc_ver
+      changed_when: false
+      failed_when: runtime_runc_ver.stdout is not search('runc version ' ~ runc_version)
+      check_mode: false

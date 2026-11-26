@@ -8,7 +8,8 @@
     name: haproxy
     state: restarted
 
-- name: Restart keepalived (only when running)
+# 仅已启动时重启：配置变更时未启动的节点不拉起（有序启动由 ha_keepalived 控制）
+- name: Restart keepalived
   ansible.builtin.systemd:
     name: keepalived
     state: restarted

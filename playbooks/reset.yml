@@ -1,6 +1,7 @@
 ---
 # 阶段 99：重置集群（独立执行，不入 site.yml；worker 先于 master）。
-# 双确认门禁：ansible-playbook playbooks/reset.yml -e confirm_reset=yes
+# 双确认门禁（never 标签 + 显式变量）：
+#   ansible-playbook playbooks/reset.yml --tags reset -e confirm_reset=yes
 - name: Reset workers
   hosts: workers
   gather_facts: false
@@ -8,6 +9,7 @@
   roles:
     - common
     - reset
+  tags: [reset]
 
 - name: Reset masters (one at a time)
   hosts: masters
@@ -17,3 +19,4 @@
   roles:
     - common
     - reset
+  tags: [reset]

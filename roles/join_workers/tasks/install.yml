@@ -1,0 +1,112 @@
+---
+# 阶段 70：worker 加入（手册 5.9）。kubectl 核对统一 delegate 到 master01。
+- name: Join the cluster
+  tags: [kubeadm]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 手册 5.9：kubelet.conf 存在即已加入，整段跳过
+    - name: Skip when already joined (kubelet.conf exists)
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: jw_joined
+
+    - name: Join the cluster
+      when: not jw_joined.stat.exists
+      block:
+        # worker 上同样跑 calico-node，镜像内 nft 可用性先检（同阶段 60 的教训）
+        - name: Run the nft preflight
+          ansible.builtin.command:
+            cmd: >-
+              nerdctl -n k8s.io run --rm --privileged --net=host --entrypoint nft
+              {{ registry }}/calico/node:v{{ calico_version }} list tables
+          changed_when: false
+          check_mode: false
+
+        # 批内第一个节点在 master01 生成批专用凭据（run_once；serial 批次天然隔离）；输出即凭据
+        - name: Create the batch token and join command
+          ansible.builtin.command:
+            cmd: kubeadm token create --print-join-command --ttl 4h
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: jw_join_cmd
+          changed_when: false
+          no_log: true
+
+        # 手册 5.9：预拉业务镜像；镜像已存在时拉取无变化，失败只警告不中止
+        - name: Pre-pull business images
+          when: preload_images | length > 0
+          ansible.builtin.command:
+            cmd: "nerdctl --namespace k8s.io pull {{ item }}"
+          loop: "{{ preload_images }}"
+          loop_control:
+            label: "{{ item }}"
+          register: jw_preload
+          changed_when: false
+          failed_when: false
+
+        - name: Report pre-pull failures
+          when: (jw_preload.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | list) | length > 0
+          ansible.builtin.debug:
+            msg: "预拉失败（不中止，部署业务前自行补拉）：{{ jw_preload.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}"
+
+        # 手册 5.9：幂等由 kubelet.conf 存在性把关；命令含 token 故 no_log
+        - name: Run kubeadm join
+          ansible.builtin.command:
+            cmd: "{{ jw_join_cmd.stdout | trim }} --node-name={{ node_name }}"
+          args:
+            creates: /etc/kubernetes/kubelet.conf
+          no_log: true
+
+        - name: Report join completion
+          ansible.builtin.debug:
+            msg: "{{ node_name }} 已加入集群"
+
+      rescue:
+        - name: Advise on join failure
+          ansible.builtin.fail:
+            msg: >-
+              {{ node_name }} join 失败（输出已因含凭据被屏蔽）。
+              排查：journalctl -u kubelet -e、crictl ps -a、master01 上 kubectl get nodes。
+              修复后重跑 join-workers.yml（幂等，已加入节点自动跳过）。
+
+    # ---- 批次门禁（流程内等待，不打 verify）：本批全部 Ready 才放行下一批 ----
+    - name: Wait for this node to be Ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready node/{{ node_name }} --timeout=15m
+      delegate_to: "{{ groups['masters'][0] }}"
+      changed_when: false
+      check_mode: false
+
+    # 手册第 6 章：operator 模式下 calico-node 在 calico-system 命名空间
+    - name: Wait for calico-node Running on this node
+      ansible.builtin.command:
+        cmd: >-
+          kubectl -n calico-system wait --for=container=calico-node
+          --field-selector spec.nodeName={{ node_name }} pod -l k8s-app=calico-node --timeout=10m
+      delegate_to: "{{ groups['masters'][0] }}"
+      register: jw_calico
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # 失败时先打出 Pod 明细再失败，便于现场排查
+    - name: Show pod details when calico-node is not ready
+      when: jw_calico.rc != 0
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          kubectl -n calico-system get pods -o wide | grep -E '{{ node_name }}|NAME'
+      delegate_to: "{{ groups['masters'][0] }}"
+      register: jw_calico_debug
+      changed_when: false
+      failed_when: true
+      check_mode: false
+
+    - name: Print the pod details
+      when: jw_calico.rc != 0
+      ansible.builtin.debug:
+        var: jw_calico_debug.stdout_lines

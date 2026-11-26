@@ -1,0 +1,38 @@
+---
+# 阶段 20 中段：keepalived 有序启动（手册 3.5）。master01 先持有两个 VIP，后续节点才启动。
+- name: Start keepalived in priority order
+  tags: [ha]
+  block:
+    # 手册 3.5
+    - name: Start and enable keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: started
+        enabled: true
+
+    # 手册 3.5：master01 起来并持有双 VIP 后才轮到下一台（serial 保证逐台）
+    - name: Wait for both VIPs on master01 before starting the next node
+      when: inventory_hostname == groups['masters'][0]
+      ansible.builtin.command:
+        cmd: ip -4 addr show
+      register: ka_vip_wait
+      until:
+        - ka_vip_wait.stdout | length > 0
+        - ka_vip_wait.stdout is search(vip ~ '/')
+        - ka_vip_wait.stdout is search(ext_vip ~ '/')
+      retries: 20
+      delay: 3
+      changed_when: false
+      check_mode: false
+
+    # 手册 3.5：VIP 应仍留在 master01
+    - name: Confirm keepalived is running on master02/03
+      when: inventory_hostname != groups['masters'][0]
+      ansible.builtin.command:
+        cmd: systemctl is-active keepalived
+      register: ka_active_wait
+      until: ka_active_wait.stdout | trim == 'active'
+      retries: 10
+      delay: 3
+      changed_when: false
+      check_mode: false

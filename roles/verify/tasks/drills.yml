@@ -1,0 +1,123 @@
+---
+# 阶段 90 演练（手册 9.1/9.2）：默认不执行（never），显式 --tags connectivity / --tags failover 才跑。
+- name: Run the DNS and cross-node connectivity tests
+  tags: [never, connectivity]
+  when: busybox_tag | default('') | length > 0
+  block:
+    - name: Run the tests and clean up
+      block:
+        # 手册 9.2：集群内 DNS 必须能解析 Service
+        - name: Resolve kubernetes.default via DNS
+          ansible.builtin.command:
+            cmd: kubectl run dns-test --rm -i --restart=Never --image={{ registry }}/busybox:{{ busybox_tag }} -- nslookup kubernetes.default
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_dns
+          changed_when: false
+          check_mode: false
+
+        # 手册 9.2：优先挑前两个 worker；没有 worker 时退回 master01/master02
+        - name: Start two cross-node pods
+          ansible.builtin.command:
+            cmd: >-
+              kubectl run {{ item.name }} --image={{ registry }}/busybox:{{ busybox_tag }}
+              --overrides='{"spec":{"nodeName":"{{ item.node }}"}}' -- sleep 300
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          loop:
+            - name: net-a
+              node: "{{ (groups['workers'] | default([]) + groups['masters'])[0] }}"
+            - name: net-b
+              node: "{{ (groups['workers'] | default([]) + groups['masters'])[1] }}"
+          register: vf_net_pods
+          changed_when: false
+
+        # 约 1 分钟：15 次 × 4 秒。Pod 刚创建可能还没分配 IP
+        - name: Get the net-b pod IP
+          ansible.builtin.command:
+            cmd: kubectl get pod net-b -o jsonpath='{.status.podIP}'
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_netb_ip
+          until: (vf_netb_ip.stdout | trim | length) > 0
+          retries: 15
+          delay: 4
+          changed_when: false
+          check_mode: false
+
+        # 手册 9.2：跨节点 Pod 连通性（IPIP 隧道 + Calico 策略）
+        - name: Ping net-b from net-a
+          ansible.builtin.command:
+            cmd: kubectl exec net-a -- ping -c 3 {{ vf_netb_ip.stdout | trim }}
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_ping
+          changed_when: false
+          check_mode: false
+
+      always:
+        - name: Clean up the test pods
+          ansible.builtin.command:
+            cmd: kubectl delete pod net-a net-b --ignore-not-found --wait=false
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          changed_when: false
+
+# 手册 9.1：VIP 漂移演练（--tags failover）。停掉持有者 haproxy，两个 VIP 都必须漂走再接管。
+- name: Run the VIP failover drill
+  tags: [never, failover]
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    - name: Stop the holder, verify the takeover, restore
+      block:
+        - name: Find the current VIP holder
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              ip -4 addr show | grep -w '{{ vip }}' >/dev/null && echo holder || echo ''
+          register: vf_vip_holder
+          changed_when: false
+          check_mode: false
+
+        - name: Stop haproxy on the holder
+          when: (vf_vip_holder.stdout | trim) == 'holder'
+          ansible.builtin.systemd:
+            name: haproxy
+            state: stopped
+
+        # 约 1 分钟：20 次 × 3 秒。weight -30 降权后 keepalived 让出 VIP
+        - name: Wait for this node to release the VIP
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              ip -4 addr show | grep -w '{{ vip }}' || true
+          when: (vf_vip_holder.stdout | trim) == 'holder'
+          register: vf_vip_after
+          until: vf_vip_after.stdout | trim | length == 0
+          retries: 20
+          delay: 3
+          changed_when: false
+          check_mode: false
+
+        # 约 1 分钟：20 次 × 3 秒。接管后 apiserver 端口经 VIP 可达
+        - name: Verify another master took over the VIP
+          ansible.builtin.shell:
+            cmd: |
+              timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo takeover-ok
+          delegate_to: "{{ groups['masters'][0] }}"
+          run_once: true
+          register: vf_failover_check
+          until: vf_failover_check.stdout | trim == 'takeover-ok'
+          retries: 20
+          delay: 3
+          changed_when: false
+          check_mode: false
+
+      always:
+        - name: Restart local haproxy
+          when: (vf_vip_holder.stdout | trim) == 'holder'
+          ansible.builtin.systemd:
+            name: haproxy
+            state: started

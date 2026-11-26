@@ -1,0 +1,55 @@
+---
+# 阶段 51 验证：只读核对 etcd 成员数/健康与节点状态（手册 5.5；NotReady 属预期，装完 Calico 才 Ready）。
+- name: Verify the control-plane join
+  tags: [kubeadm, verify]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 手册 5.5：serial:1 逐台加入，本台完成后 started 成员数应等于已加入台数
+    - name: Verify the etcd member count matches the joined masters
+      ansible.builtin.shell:
+        cmd: >-
+          crictl exec "$(crictl ps --name etcd -q | head -n1)"
+          etcdctl --endpoints=https://127.0.0.1:2379
+          --cacert=/etc/kubernetes/pki/etcd/ca.crt
+          --cert=/etc/kubernetes/pki/etcd/server.crt
+          --key=/etc/kubernetes/pki/etcd/server.key
+          member list
+      delegate_to: "{{ groups['masters'][0] }}"
+      register: jm_etcd_members
+      changed_when: false
+      failed_when: >-
+        (jm_etcd_members.stdout | regex_findall('started')) | length
+        != groups['masters'].index(inventory_hostname) + 1
+      check_mode: false
+
+    # 手册 5.5：跨节点 endpoint health，证明新成员真正提供服务
+    - name: Verify this node's etcd endpoint is healthy
+      ansible.builtin.shell:
+        cmd: >-
+          crictl exec "$(crictl ps --name etcd -q | head -n1)"
+          etcdctl --endpoints=https://{{ node_ip }}:2379
+          --cacert=/etc/kubernetes/pki/etcd/ca.crt
+          --cert=/etc/kubernetes/pki/etcd/server.crt
+          --key=/etc/kubernetes/pki/etcd/server.key
+          endpoint health
+      delegate_to: "{{ groups['masters'][0] }}"
+      register: jm_etcd_health
+      changed_when: false
+      failed_when: jm_etcd_health.stdout is not search('is healthy[:] successfully')
+      check_mode: false
+
+    - name: Show node status
+      ansible.builtin.command:
+        cmd: kubectl get nodes -o wide
+      delegate_to: "{{ groups['masters'][0] }}"
+      register: jm_nodes
+      changed_when: false
+      check_mode: false
+
+    - name: Print node status
+      ansible.builtin.debug:
+        var: jm_nodes.stdout_lines

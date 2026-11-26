@@ -1,0 +1,63 @@
+---
+# 阶段 99：重置（手册 9.3 语义）。etcd 数据不可恢复，confirm_reset 双确认放最前。
+- name: Reset the cluster
+  tags: [never, reset]
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    # 任何其他值一律拒绝；不带 -e confirm_reset=yes 时这里直接失败
+    - name: Require explicit reset confirmation
+      ansible.builtin.assert:
+        that: (confirm_reset | default('')) == 'yes'
+        fail_msg: >-
+          重置会删除整个集群（etcd 数据不可恢复）。
+          确认请加 "-e confirm_reset=yes" 重新执行；任何其他值一律拒绝。
+
+    # 未初始化的节点也允许跑（failed_when: false 放行 rc!=0）
+    - name: Run kubeadm reset
+      ansible.builtin.command:
+        cmd: kubeadm reset -f
+      register: reset_rc
+      changed_when: "'[reset]' in reset_rc.stdout"
+      failed_when: false
+
+    - name: Remove the leftover directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/etcd
+        - /var/lib/kubelet
+        - /var/lib/calico
+        - /etc/cni
+        - /root/.kube
+        - /var/lib/cni
+
+    # 只删 kube-proxy 自己的表；绝不 nft flush ruleset（会清掉宿主机其他规则）
+    - name: Check the kube-proxy nft table
+      ansible.builtin.shell:
+        cmd: nft list table kube-proxy >/dev/null 2>&1
+      register: reset_nft_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Remove only the kube-proxy nft table
+      when: reset_nft_probe.rc == 0
+      ansible.builtin.command:
+        cmd: nft delete table kube-proxy
+      changed_when: true
+
+    # 镜像与软件包保留，节点可以直接重新 join
+    - name: Stop kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: stopped
+
+    - name: Report reset completion
+      ansible.builtin.debug:
+        msg: >-
+          {{ node_name }} 已重置：kubeadm/证书/etcd/CNI 配置已删除，kube-proxy nft 表已清理。
+          软件包与 HA（haproxy/keepalived）保留；如需彻底下线节点请另行处理。

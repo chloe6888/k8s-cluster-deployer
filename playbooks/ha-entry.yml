@@ -23,27 +23,36 @@
   hosts: first_master
   gather_facts: false
   vars_files: ../config/versions.yml
-  tasks:
-    - name: Assert master01 holds both the internal and external VIPs
-      ansible.builtin.command:
-        cmd: "ip -4 addr show"
-      register: ha_final_vips
-      changed_when: false
-      failed_when: >-
-        ha_final_vips.stdout is not search((vip | regex_escape) ~ '/')
-        or ha_final_vips.stdout is not search((ext_vip | regex_escape) ~ '/')
-
-    - name: Probe apiserver via the internal VIP (only checks the HAProxy port)
-      ansible.builtin.shell: "timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo port-ok"
-      args:
-        executable: /bin/bash
-      register: ha_final_port
-      changed_when: false
-      failed_when: ha_final_port.stdout | trim != 'port-ok'
-
-    - name: Print VIP ownership and listening ports
-      ansible.builtin.debug:
-        msg:
-          - "两个 VIP 均在 {{ node_name }}：通过"
-          - "HAProxy 已在 {{ vip }}:{{ vip_port }} 监听：通过"
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
   tags: [ha, verify]
+  tasks:
+    - name: Verify the HA entry
+      block:
+        # 手册 3.9：两个 VIP 都应落在 master01（priority 最高）
+        - name: Assert master01 holds both the internal and external VIPs
+          ansible.builtin.command:
+            cmd: ip -4 addr show
+          register: ha_final_vips
+          changed_when: false
+          failed_when: >-
+            ha_final_vips.stdout is not search((vip | regex_escape) ~ '/')
+            or ha_final_vips.stdout is not search((ext_vip | regex_escape) ~ '/')
+          check_mode: false
+
+        # 手册 3.9：只探 HAProxy 端口，不带 TLS
+        - name: Probe apiserver via the internal VIP
+          ansible.builtin.shell:
+            cmd: |
+              timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo port-ok
+          register: ha_final_port
+          changed_when: false
+          failed_when: ha_final_port.stdout | trim != 'port-ok'
+          check_mode: false
+
+        - name: Print VIP ownership and listening ports
+          ansible.builtin.debug:
+            msg:
+              - "两个 VIP 均在 {{ node_name }}：通过"
+              - "HAProxy 已在 {{ vip }}:{{ vip_port }} 监听：通过"

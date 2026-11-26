@@ -1,0 +1,137 @@
+---
+# 阶段 40：K8s 软件包（手册 5.1 apt 源信任链 + 5.2 crictl），全部节点并行。
+- name: Install the K8s packages
+  tags: [kubeadm]
+  block:
+    # 指纹核对需要 gpg
+    - name: Install gnupg
+      ansible.builtin.apt:
+        name: gnupg
+        state: present
+        update_cache: false
+
+    # 获取即校验
+    - name: Fetch Release.key
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_file: Release.key
+
+    # 与 group_vars 登记值比对；未登记不拦（下面会提示）
+    - name: Verify the Release.key sha256 against the registered value
+      ansible.builtin.command:
+        cmd: sha256sum {{ package_dir }}/Release.key
+      register: pkg_key_sha
+      changed_when: false
+      failed_when: k8s_release_key_sha256 | default('') != '' and pkg_key_sha.stdout.split()[0] != k8s_release_key_sha256
+      check_mode: false
+
+    - name: Warn that no Release.key checksum is registered
+      ansible.builtin.debug:
+        msg: >-
+          警告：k8s_release_key_sha256 / k8s_release_key_fingerprint 未填写，跳过指纹核对。
+          公钥可信度只依赖内网镜像站，请在 group_vars 登记后重跑阶段 40。
+      when: (k8s_release_key_sha256 | default('')) == '' or (k8s_release_key_fingerprint | default('')) == ''
+
+    # 不一致立即停止——信任链只靠内网镜像站
+    - name: Verify the GPG fingerprint
+      ansible.builtin.command:
+        cmd: gpg --show-keys --fingerprint {{ package_dir }}/Release.key
+      register: pkg_key_fp
+      changed_when: false
+      failed_when: >-
+        k8s_release_key_fingerprint | default('') != ''
+        and (pkg_key_fp.stdout | replace(' ', '') is not search(k8s_release_key_fingerprint | replace(' ', '')))
+      check_mode: false
+
+    - name: Convert the key to an apt keyring
+      ansible.builtin.command:
+        cmd: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg {{ package_dir }}/Release.key
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Set keyring permissions to 0644
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        mode: "0644"
+
+    - name: Write the apt source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        mode: "0644"
+        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ apt_k8s_url }} /\n"
+
+    - name: Run apt update
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 600
+
+    # 候选版本与来源任一不符即停
+    - name: Verify the kubeadm candidate version and origin are {{ kubernetes_version }}
+      ansible.builtin.command:
+        cmd: apt-cache policy kubeadm
+      register: pkg_kubeadm_policy
+      changed_when: false
+      failed_when: >-
+        pkg_kubeadm_policy.stdout is not search('Candidate: ' ~ kubernetes_version)
+        or pkg_kubeadm_policy.stdout is not search((apt_k8s_url | urlsplit('hostname')) | regex_escape)
+      check_mode: false
+
+    - name: Install the pinned kubelet / kubeadm / kubectl
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+          - "kubeadm={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+          - "kubectl={{ kubernetes_version }}-{{ kubernetes_deb_revision }}"
+        state: present
+        update_cache: false
+
+    - name: Hold the three packages
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubelet, kubeadm, kubectl]
+
+    # 只设开机启动不启动，init/join 时再拉起
+    - name: Enable kubelet on boot without starting it
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+
+    # 双网卡固定节点 IP，init/join 之前必须完成
+    - name: Pin the node IP on both NICs
+      ansible.builtin.copy:
+        dest: /etc/default/kubelet
+        mode: "0644"
+        content: "KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}\n"
+
+    # 缺才装
+    - name: Check whether crictl exists
+      ansible.builtin.command:
+        cmd: crictl --version
+      register: pkg_crictl_ver
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Install cri-tools
+      when: pkg_crictl_ver.rc != 0
+      ansible.builtin.apt:
+        name: cri-tools
+        state: present
+        update_cache: false
+
+    - name: Hold cri-tools
+      ansible.builtin.dpkg_selections:
+        name: cri-tools
+        selection: hold
+
+    - name: Write /etc/crictl.yaml
+      ansible.builtin.copy:
+        dest: /etc/crictl.yaml
+        mode: "0644"
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false

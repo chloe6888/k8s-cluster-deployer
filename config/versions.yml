@@ -1,3 +1,4 @@
+---
 # 统一版本配置。升级时先改这里，再同步 scripts/ 和 artifacts/。
 kubernetes_version: "1.36.6"
 kubernetes_deb_revision: "1.1"        # deb 包版本后缀：kubelet=1.36.6-1.1

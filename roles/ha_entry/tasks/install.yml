@@ -1,0 +1,83 @@
+---
+# 阶段 20 上半段：HAProxy / keepalived 安装与配置（手册 3.1–3.5），masters 并行。
+- name: Install and configure the HA entry
+  tags: [ha]
+  block:
+    # 修订 3：健康检查脚本需要 socat
+    - name: Install haproxy / keepalived / socat
+      ansible.builtin.apt:
+        name: [haproxy, keepalived, socat]
+        state: present
+        update_cache: false
+      register: ha_install
+
+    # 手册 3.1：默认配置的 haproxy 会被 apt 拉起，必须立刻停下等有序启动；
+    # 依赖即时顺序，不能写成 handler（no-handler 跳过的原因）
+    - name: Stop both services right after install
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop: [haproxy, keepalived]
+      when: ha_install is changed
+
+    # 手册 3.2：haproxy -c 校验通过才落盘；配置含后端地址，no_log
+    - name: Write the HAProxy configuration
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: haproxy
+        mode: "0640"
+        validate: haproxy -c -f %s
+      no_log: true
+      notify: Restart haproxy
+
+    # 手册 3.3；修订 9
+    - name: Write the health-check script
+      ansible.builtin.template:
+        src: check-haproxy.sh.j2
+        dest: /etc/keepalived/check-haproxy.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    # 手册 3.4：keepalived -t 校验通过才落盘；配置含 auth_pass，no_log
+    - name: Write the keepalived configuration
+      ansible.builtin.template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: "0600"
+        validate: keepalived -t -f %s
+      no_log: true
+      notify: Restart keepalived
+
+    # 手册 3.5：keepalived 必须排在 haproxy 之后（健康检查依赖其端口）
+    - name: Order keepalived after HAProxy via a systemd drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keepalived.service.d/10-after-haproxy.conf
+        mode: "0644"
+        content: |
+          [Unit]
+          After=haproxy.service
+          Wants=haproxy.service
+      notify: Reload systemd
+
+    # 手册 3.5
+    - name: Hold the haproxy / keepalived versions
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [haproxy, keepalived]
+
+    # 手册 3.5
+    - name: Start and enable HAProxy on all masters in parallel
+      ansible.builtin.systemd:
+        name: haproxy
+        state: started
+        enabled: true
+
+    # 让上面的配置变更（重启 haproxy / 重载 systemd）先生效
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers

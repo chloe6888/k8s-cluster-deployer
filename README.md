@@ -43,14 +43,17 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 
 ansible-playbook -i inventories/cqjf playbooks/site.yml --vault-password-file ~/.vault_pass.cqjf  # 整体部署（不含 kernel-pin/reset）
 ansible-playbook -i inventories/cqjf playbooks/ha-entry.yml            # 单阶段
-ansible-playbook -i inventories/cqjf playbooks/ha-entry.yml --tags haproxy   # 单步骤
-ansible-playbook -i inventories/cqjf playbooks/ha-entry.yml --tags verify    # 只做验证
+ansible-playbook -i inventories/cqjf playbooks/ha-entry.yml --tags verify    # 只做验证（所有阶段的 verify 块）
 ansible-playbook -i inventories/cqjf playbooks/ha-entry.yml --limit k8s-master01  # 单台主机
 ansible-playbook -i inventories/cqjf playbooks/join-workers.yml --limit k8s-worker11,k8s-worker12  # worker 灰度
-ansible-playbook -i inventories/test  playbooks/kernel-pin.yml         # 固定内核（需 pin_kernel=true，会重启）
-ansible-playbook -i inventories/test  playbooks/verify.yml --tags failover  # VIP 漂移演练（仅测试环境）
-ansible-playbook -i inventories/test  playbooks/reset.yml -e confirm_reset=yes  # 重置（仅测试环境）
+ansible-playbook -i inventories/test  playbooks/kernel-pin.yml --tags os   # 固定内核（需 pin_kernel=true，会重启；never 标签须显式点名）
+ansible-playbook -i inventories/test  playbooks/verify.yml --tags connectivity  # DNS/跨节点连通性演练（仅测试环境）
+ansible-playbook -i inventories/test  playbooks/verify.yml --tags failover     # VIP 漂移演练（仅测试环境）
+ansible-playbook -i inventories/test  playbooks/reset.yml --tags reset -e confirm_reset=yes  # 重置（双确认，仅测试环境）
 ```
+
+阶段标签（`--tags`）：`os` / `ha` / `runtime` / `kubeadm` / `cni` / `lb` / `gateway`；`verify` 为只读验证；
+`kernel-pin`、`reset`、连通性与漂移演练带 `never`，必须显式 `--tags` 才会执行（任务书写规范见 `docs/ansible-task-style.md`）。
 
 ## 离线资源命令
 

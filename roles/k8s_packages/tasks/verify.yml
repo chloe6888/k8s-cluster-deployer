@@ -1,0 +1,30 @@
+---
+# 阶段 40 验证：只读核对版本、hold 与 crictl（手册 5.1/5.2）。
+- name: Verify the K8s packages
+  tags: [kubeadm, verify]
+  block:
+    - name: Verify the kubeadm version
+      ansible.builtin.command:
+        cmd: kubeadm version -o short
+      register: pkg_kubeadm_ver
+      changed_when: false
+      failed_when: pkg_kubeadm_ver.stdout | trim != 'v' ~ kubernetes_version
+      check_mode: false
+
+    - name: Verify the hold list contains all four packages
+      ansible.builtin.command:
+        cmd: apt-mark showhold
+      register: pkg_holds
+      changed_when: false
+      failed_when: >-
+        ['kubelet', 'kubeadm', 'kubectl', 'cri-tools'] | difference(pkg_holds.stdout_lines) | length > 0
+      check_mode: false
+
+    # 与 nerdctl -n k8s.io 同一命名空间，装错命名空间 crictl info 会拿不到容器
+    - name: Verify crictl info
+      ansible.builtin.command:
+        cmd: crictl info
+      register: pkg_crictl_info
+      changed_when: false
+      failed_when: pkg_crictl_info.rc != 0
+      check_mode: false

@@ -1,0 +1,124 @@
+---
+# Calico 两件套 Chart，只在 first_master 上执行。
+# CRD 必须 server-side apply（客户端 apply 超 last-applied 注解上限）。
+- name: Install Calico
+  tags: [cni]
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  module_defaults:
+    ansible.builtin.shell:
+      executable: /bin/bash
+  block:
+    - name: Create the charts directory
+      ansible.builtin.file:
+        path: "{{ package_dir }}/charts"
+        state: directory
+        mode: "0755"
+
+    # 获取两个 Chart（获取即校验 SHA256SUMS）
+    - name: Fetch the Calico charts
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_files:
+          - "tigera-operator-v{{ calico_version }}.tgz"
+          - "crd.projectcalico.org.v1-v{{ calico_version }}.tgz"
+
+    # 安装前预检，calico/node 镜像内的 nft 必须可用
+    - name: Run the nft preflight
+      ansible.builtin.command:
+        cmd: >-
+          nerdctl -n k8s.io run --rm --privileged --net=host --entrypoint nft
+          {{ registry }}/calico/node:v{{ calico_version }} list tables
+      changed_when: false
+      check_mode: false
+
+    # CRD 先渲染到文件，再比较差异；apply 输出永远是 serverside-applied，不能靠输出判断
+    - name: Render the CRD chart
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          helm template calico-crds {{ package_dir }}/charts/crd.projectcalico.org.v1-v{{ calico_version }}.tgz \
+            --include-crds > {{ package_dir }}/charts/calico-crds.yaml
+          grep -q CustomResourceDefinition {{ package_dir }}/charts/calico-crds.yaml
+      changed_when: false
+      check_mode: false
+
+    - name: Diff the CRDs against the cluster
+      ansible.builtin.command:
+        cmd: kubectl diff --server-side -f {{ package_dir }}/charts/calico-crds.yaml
+      register: calico_crd_diff
+      changed_when: calico_crd_diff.rc == 1
+      failed_when: calico_crd_diff.rc not in [0, 1]
+      check_mode: false
+
+    - name: Apply the CRDs server-side
+      when: calico_crd_diff.rc == 1
+      ansible.builtin.command:
+        cmd: kubectl apply --server-side --force-conflicts -f {{ package_dir }}/charts/calico-crds.yaml
+      changed_when: true
+
+    # values 模板渲染，唯一事实源在 group_vars + versions.yml
+    - name: Render calico-values.yaml
+      ansible.builtin.template:
+        src: calico-values.yaml.j2
+        dest: "{{ package_dir }}/charts/calico-values.yaml"
+        mode: "0644"
+      register: calico_values
+
+    # helm upgrade 每次都会产生新 revision，只在 release 缺失/异常、chart 版本变化、values 变化时执行
+    - name: Read the current Calico release
+      ansible.builtin.command:
+        cmd: helm list -n tigera-operator --filter '^calico$' -o json
+      register: calico_release
+      changed_when: false
+      check_mode: false
+
+    - name: Install or upgrade the Calico operator
+      when: >-
+        (calico_release.stdout | from_json | length) == 0
+        or (calico_release.stdout | from_json | first).status != 'deployed'
+        or (calico_release.stdout | from_json | first).chart != 'tigera-operator-v' ~ calico_version
+        or calico_values.changed
+      ansible.builtin.command:
+        cmd: >-
+          helm upgrade --install calico {{ package_dir }}/charts/tigera-operator-v{{ calico_version }}.tgz
+          -n tigera-operator --create-namespace
+          -f {{ package_dir }}/charts/calico-values.yaml
+          --history-max 5
+      changed_when: true
+
+    # 约 10 分钟：60 次 × 10 秒。TigeraStatus 刚创建时可能还不存在，所以先要求有结果
+    - name: Wait for every TigeraStatus to be Available
+      ansible.builtin.command:
+        cmd: >-
+          kubectl get tigerastatus -o
+          jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Available")].status}{"\n"}{end}'
+      register: calico_tigerastatus
+      until: >-
+        calico_tigerastatus.stdout_lines | length > 0
+        and (calico_tigerastatus.stdout_lines | reject('search', '=True$') | list | length) == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      check_mode: false
+
+    # operator 运行时按 Installation.spec.registry 生成镜像，这里检查实际运行的 Pod
+    - name: Verify the running Calico images point at {{ registry }}
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kubectl get pods -n calico-system \
+            -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' | sort -u
+      register: calico_images
+      changed_when: false
+      failed_when: >-
+        calico_images.stdout_lines | length == 0
+        or (calico_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
+      check_mode: false
+
+    - name: Wait for every node to be Ready
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=Ready nodes --all --timeout=10m
+      changed_when: false
+      check_mode: false
