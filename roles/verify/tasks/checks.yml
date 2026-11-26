@@ -49,10 +49,14 @@
           changed_when: false
           check_mode: false
 
+        # 期望值必须用双引号 YAML 变量装真换行：单引号里的 \n 是字面量两个字符，
+        # 与真实输出永不相等会让验收必挂（决策 #40 修复）
         - name: Record inotify mismatches
-          when: vf_inotify.stdout | trim != '8192\n1048576\n65536'
+          vars:
+            inotify_expected: "8192\n1048576\n65536"
+          when: vf_inotify.stdout | trim != inotify_expected
           ansible.builtin.set_fact:
-            verify_failures: "{{ verify_failures + [verify_node ~ ' inotify: ' ~ (vf_inotify.stdout | trim | replace('\n', ' '))] }}"
+            verify_failures: "{{ verify_failures + [verify_node ~ ' inotify: ' ~ (vf_inotify.stdout | trim | splitlines() | join(' '))] }}"
 
         - name: Read the journald SystemMaxUse
           ansible.builtin.command:

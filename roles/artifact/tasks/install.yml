@@ -22,9 +22,16 @@
     # （源头 fail-fast，不依赖文件站那份拷贝），再经 SSH 推给节点；copy 幂等，重跑跳过未变文件
     - name: Push from the repository
       block:
+        # 决策 #40：字典键不渲染模板，defaults 里存平行列表、这里 zip 成字典（列表元素会渲染）
+        - name: Assert the mapping lists are aligned
+          ansible.builtin.assert:
+            that: artifact_repo_flat_names | length == artifact_repo_paths | length
+            fail_msg: artifact_repo_flat_names 与 artifact_repo_paths 长度不一致（roles/artifact/defaults/main.yml），逐项对齐后重试
+            quiet: true
+
         - name: Map flat names to repository paths
           ansible.builtin.set_fact:
-            artifact_repo_map: "{{ artifact_repo_map_defaults | combine(artifact_repo_map_extra | default({})) }}"
+            artifact_repo_map: "{{ dict(artifact_repo_flat_names | zip(artifact_repo_paths)) | combine(artifact_repo_map_extra | default({})) }}"
 
         - name: Assert every file is in the mapping
           ansible.builtin.assert:

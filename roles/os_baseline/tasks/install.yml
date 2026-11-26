@@ -8,17 +8,21 @@
       ansible.builtin.hostname:
         name: "{{ node_name }}"
 
-    # 手册 2.1：受管区块写入全部节点的 内网IP 节点名
+    # 手册 2.1：受管区块写入全部节点的 内网IP 节点名。
+    # 两处坑（决策 #40）：join('\n') 的单引号 \n 是字面量，必须用双引号变量装真换行；
+    # node_name 是各主机 set_fact 的变量，--limit/单跑时未访问主机的 hostvars 里没有，
+    # 节点名直接用 cluster_prefix-<主机名> 拼出（node_ip 是 inventory 变量，始终可取）
     - name: Write the managed /etc/hosts block (all nodes, internal IP, node name)
       ansible.builtin.blockinfile:
         path: /etc/hosts
         marker: "# {mark} k8s-cluster-deployer managed"
         block: "{{ hosts_lines }}"
       vars:
+        nl: "\n"
         hosts_lines: >-
           {{ groups['k8s_all'] | map('extract', hostvars, 'node_ip')
-             | zip(groups['k8s_all'] | map('extract', hostvars, 'node_name'))
-             | map('join', ' ') | join('\n') }}
+             | zip(groups['k8s_all'] | map('regex_replace', '^', cluster_prefix ~ '-'))
+             | map('join', ' ') | join(nl) }}
 
     # 手册 2.1：/etc/hosts 写完立刻确认 Harbor 域名可解析
     - name: Verify Harbor hostname resolution
@@ -109,11 +113,13 @@
 
     # 手册 2.4：注释掉所有 swap 条目（不只是 /swap.img——UUID 或其他路径的 swap
     # 同样会导致重启后 swap 复活）。swap 是第 3 个字段，按字段结构匹配，
-    # 不会误伤行尾注释里带 swap 字样的数据盘条目；已注释行跳过（幂等）
+    # 不会误伤行尾注释里带 swap 字样的数据盘条目；已注释行跳过（幂等）。
+    # 空白类必须用 [ \t] 而非 \s：\s 含换行，会把匹配拉到上一行，
+    # 注释掉空行而漏掉 swap 行本身（决策 #40 修复）
     - name: Comment out every swap entry in /etc/fstab
       ansible.builtin.replace:
         path: /etc/fstab
-        regexp: '^(?!\s*#)(\s*\S+\s+\S+\s+swap\s.*)$'
+        regexp: '^(?![ \t]*#)([ \t]*\S+[ \t]+\S+[ \t]+swap[ \t].*)$'
         replace: '#\1'
 
     # 手册 2.6

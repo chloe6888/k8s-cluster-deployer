@@ -62,6 +62,14 @@
       failed_when: runtime_which_containerd.stdout_lines | length != 1 or runtime_which_containerd.stdout_lines[0] != '/usr/local/bin/containerd'
       check_mode: false
 
+    # 官方 tar 包只有 bin/*，不带 /etc/containerd；apt 从未装过 containerd 的节点上
+    # 该目录不存在，config 生成步骤的重定向会直接失败（决策 #40 修复）
+    - name: Ensure /etc/containerd exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
     # 只生成一次，后续改动都走 replace（2.3.0 键位以实测为准）
     - name: Generate the default config.toml only when missing
       ansible.builtin.shell:

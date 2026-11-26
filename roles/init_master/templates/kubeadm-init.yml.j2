@@ -24,7 +24,7 @@ apiServer:
   - {{ ext_vip }}
 {% for h in groups['masters'] %}
   - {{ hostvars[h]['node_ip'] }}
-  - {{ hostvars[h]['node_name'] }}
+  - {{ cluster_prefix }}-{{ h }}
 {% endfor %}
 {% for san in extra_cert_sans | default([]) %}
   - {{ san }}

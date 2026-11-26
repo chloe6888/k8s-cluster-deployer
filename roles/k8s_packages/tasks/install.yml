@@ -61,10 +61,11 @@
         mode: "0644"
         content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ apt_k8s_url }} /\n"
 
+    # 不设 cache_valid_time（决策 #40）：10 分钟内刚 refresh 过缓存时 apt 会跳过刷新，
+    # 新写入的 kubernetes 源不会进索引，下面的候选版本检查必然失败
     - name: Run apt update
       ansible.builtin.apt:
         update_cache: true
-        cache_valid_time: 600
 
     # 候选版本与来源任一不符即停
     - name: Verify the kubeadm candidate version and origin are {{ kubernetes_version }}

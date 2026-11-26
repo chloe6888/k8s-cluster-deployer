@@ -26,3 +26,4 @@ ignore: |
   artifacts/
   collections/
   .github/
+  inventories/*/group_vars/all/vault.yml

@@ -14,6 +14,19 @@
         path: /etc/kubernetes/kubelet.conf
       register: jw_joined
 
+    # 批内第一个节点在 master01 生成批专用凭据（run_once；serial 批次天然隔离）。
+    # 必须放在 when 块外面（决策 #40 修复）：run_once 任务的 when 只按批内第一台求值，
+    # 部分重跑时若第一台已加入，凭据任务被整体跳过，后面未加入的机器拿不到 join 命令。
+    # 已全部加入的重跑会多生成一个 4h 短 token，无副作用
+    - name: Create the batch token and join command
+      ansible.builtin.command:
+        cmd: kubeadm token create --print-join-command --ttl 4h
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: jw_join_cmd
+      changed_when: false
+      no_log: true
+
     - name: Join the cluster
       when: not jw_joined.stat.exists
       block:
@@ -25,16 +38,6 @@
               {{ registry }}/calico/node:v{{ calico_version }} list tables
           changed_when: false
           check_mode: false
-
-        # 批内第一个节点在 master01 生成批专用凭据（run_once；serial 批次天然隔离）；输出即凭据
-        - name: Create the batch token and join command
-          ansible.builtin.command:
-            cmd: kubeadm token create --print-join-command --ttl 4h
-          delegate_to: "{{ groups['masters'][0] }}"
-          run_once: true
-          register: jw_join_cmd
-          changed_when: false
-          no_log: true
 
         # 手册 5.9：预拉业务镜像；镜像已存在时拉取无变化，失败只警告不中止
         - name: Pre-pull business images

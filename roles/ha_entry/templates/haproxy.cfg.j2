@@ -64,5 +64,5 @@ backend kube-apiserver-backend
         http-check  expect status 200
         default-server inter 2s fall 3 rise 2 on-marked-down shutdown-sessions slowstart 10s
 {% for h in groups['masters'] %}
-        server {{ hostvars[h]['node_name'] }} {{ hostvars[h]['node_ip'] }}:6443 check check-ssl verify none
+        server {{ cluster_prefix }}-{{ h }} {{ hostvars[h]['node_ip'] }}:6443 check check-ssl verify none
 {% endfor %}
