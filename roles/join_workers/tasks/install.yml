@@ -82,10 +82,10 @@
       check_mode: false
 
     # 手册第 6 章：operator 模式下 calico-node 在 calico-system 命名空间
-    - name: Wait for calico-node Running on this node
+    - name: Wait for calico-node to become Ready on this node
       ansible.builtin.command:
         cmd: >-
-          kubectl -n calico-system wait --for=container=calico-node
+          kubectl -n calico-system wait --for=condition=Ready
           --field-selector spec.nodeName={{ node_name }} pod -l k8s-app=calico-node --timeout=10m
       delegate_to: "{{ groups['masters'][0] }}"
       register: jw_calico
