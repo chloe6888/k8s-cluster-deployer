@@ -13,4 +13,4 @@
   ansible.builtin.systemd:
     name: keepalived
     state: restarted
-  when: "'keepalived.service' in ansible_facts.services and ansible_facts.services['keepalived.service']['state'] == 'running'"
+  when: ansible_facts['services'].get('keepalived.service', {}).get('state', 'stopped') == 'running'
