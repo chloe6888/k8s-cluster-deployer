@@ -247,7 +247,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 4 章，并确认后续需要的镜像都在 Harbor 里。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **containerd 2.3.0**：获取并校验压缩包；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；systemd 单元用仓库里已有的 `templates/systemd/containerd.service.j2`，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
+  1. **containerd 2.3.0**：获取并校验压缩包与 systemd 单元（单元文件随 artifact 渠道取到 `package_dir`，file_url 模式同样吃 SHA256SUMS 校验；仓库侧源文件是 `templates/systemd/containerd.service.j2`，纯静态内容）；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；从 `package_dir` 安装单元，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
   2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/google_containers/pause:3.10.2`（与 kubeadm 的 `imageRepository` 同路径，决策 #4）；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4；2.x 的 default 输出是单引号，且 transfer 段也有 `config_path` 键，替换必须锚定 registry 段头，不能按 `"config_path = \"\"` 字面匹配）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。三处替换与解压安装都挂 `Restart containerd` 通知，flush 点在 Harbor 访问配置之前（后续 hosts.toml 依赖运行态）。
   3. **Harbor 访问**（修订点 4）：对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。生产环境不使用 `skip_verify`。
   4. **runc 1.4.2**：获取并校验 `runc.amd64` 与 `runc.sha256sum`；卸载 apt 版 runc；安装到 `/usr/local/sbin/runc`；变更后重启 containerd。
