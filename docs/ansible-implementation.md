@@ -266,7 +266,7 @@ k8s-cluster-deployer/
 - **主机**：全部节点，并行；helm 只装在 master。
 - **步骤**：
   1. **公钥核对**：下载 `Release.key`，核对 sha256 与 GPG 指纹（分别对照 `k8s_release_key_sha256`、`k8s_release_key_fingerprint`），**不一致立即停止**——这把公钥的可信度只靠内网镜像站，必须核对；通过后转成 apt 使用的 keyring。
-  2. **配置 apt 源**：写入 `apt_k8s_url`；执行 `apt update`；确认 `kubeadm` 的候选版本含 1.36.6，且来源是内网镜像站。
+  2. **配置 apt 源**：写入 `apt_k8s_url`；执行 `apt update`；确认 `kubeadm` 版本表含 `1.36.6-1.1` 条目且来源是配置的镜像站（决策 #43：多版本公共源的 Candidate 是仓库最高版而非目标版，故不再断言 Candidate == 1.36.6；内网单版本镜像站下两语义等价）。
   3. **安装**：`kubelet`、`kubeadm`、`kubectl` 固定为 1.36.6，并 hold；kubelet 只设为开机启动，**不要启动**。
   4. **固定节点 IP**：写入 `/etc/default/kubelet`，内容为 `--node-ip=<本机 node_ip>`（双网卡节点必须在 init/join 之前完成）。**这是全部节点 node-ip 的唯一来源**：worker 用 `kubeadm token create --print-join-command` 的命令行加入、没有配置文件，必须靠它；因此 kubeadm 的 init / join 配置里不再写 `kubeletExtraArgs`。
   5. **crictl**：没有就安装 `cri-tools` 并 hold；写入 `/etc/crictl.yaml`，指向 containerd 的 socket。

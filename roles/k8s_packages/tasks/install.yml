@@ -67,16 +67,25 @@
       ansible.builtin.apt:
         update_cache: true
 
-    # 候选版本与来源任一不符即停
-    - name: Verify the kubeadm candidate version and origin are {{ kubernetes_version }}
+    # 断言语义修正（决策 #43）：多版本公共源（如 aliyun 收全 1.36.0–1.36.7）的
+    # Candidate 是仓库最高版而非目标版，原断言"Candidate == kubernetes_version"
+    # 必炸；安装任务本身显式 =1.36.6-1.1 钉死，本断言职责是提前诊断与来源校验。
+    # 改判"版本表含目标版本条目 + 来源是配置源"；正则锚定版本表行，排除
+    # Installed/Candidate 行残留（已装同版本且源被裁的场景仍能拦下）。
+    # 内网单版本镜像站下两语义等价，手册流程不受影响（生产 4 场景实测一致）
+    - name: Verify kubeadm is available from the configured source, version {{ kubernetes_version }}
       ansible.builtin.command:
         cmd: apt-cache policy kubeadm
       register: pkg_kubeadm_policy
       changed_when: false
-      failed_when: >-
-        pkg_kubeadm_policy.stdout is not search('Candidate: ' ~ kubernetes_version)
-        or pkg_kubeadm_policy.stdout is not search((apt_k8s_url | urlsplit('hostname')) | regex_escape)
       check_mode: false
+      vars:
+        k8s_policy_origin_re: "{{ (apt_k8s_url | urlsplit('hostname')) | regex_escape }}"
+        k8s_version_entry_re: >-
+          ^\s*\*{0,3}\s*{{ (kubernetes_version ~ '-' ~ kubernetes_deb_revision) | regex_escape }}\s+\d+\s*$
+      failed_when: >-
+        (pkg_kubeadm_policy.stdout | regex_search(k8s_version_entry_re, multiline=true)) is none
+        or pkg_kubeadm_policy.stdout is not search(k8s_policy_origin_re)
 
     - name: Install the pinned kubelet / kubeadm / kubectl
       ansible.builtin.apt:
