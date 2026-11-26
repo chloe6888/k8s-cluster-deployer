@@ -52,7 +52,9 @@
         cmd: systemctl show -p UnitFileState -p ActiveState nftables
       register: os_nft_state
       changed_when: false
-      failed_when: os_nft_state.stdout_lines != ['UnitFileState=masked', 'ActiveState=inactive']
+      # systemctl show 不保证 -p 参数的输出顺序（不同主机 ActiveState 与
+      # UnitFileState 先后不定，用户实测顺序相反即炸），逐行匹配不比顺序
+      failed_when: (os_nft_state.stdout_lines | difference(['UnitFileState=masked', 'ActiveState=inactive'])) | length > 0
       check_mode: false
 
     # 初次同步最多等 2 分钟（24 次 × 5 秒）；先确认有输出再匹配已同步源（^\*）
