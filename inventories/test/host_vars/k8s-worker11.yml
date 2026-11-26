@@ -1,4 +1,0 @@
----
-node_ip: 10.4.0.11
-node_ext_ip: 10.104.0.11
-# ka_state / ka_priority 仅 master 需要

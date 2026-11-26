@@ -10,29 +10,29 @@ mirror: http://mirror.example.internal  # 内网制品 / apt 镜像站根 URL
 app_registry: ""                        # 业务镜像仓库主机（为空则不单独配置 certs.d）
 apt_k8s_url: http://mirror.example.internal/repository/kubernetes-v1.36/deb/   # 以 / 结尾，不得指向公网
 ntp_servers:                            # 内网 NTP，建议至少 2 个
-  - 10.144.67.10
-  - 10.144.67.11
+  - 10.100.0.10
+  - 10.100.0.11
 
 ## 派生变量（勿手填）
 registry: "{{ harbor }}/k8s_dmz"        # 系统镜像项目，必须为公开项目
 file_url: "{{ mirror }}/repository/tmp-file/k8sv1.36"
 
 ## 网卡与网段（双网卡：内网承 API/etcd/Pod，外网承默认路由/业务入口）
-node_iface: vlan1514
-ext_iface: vlan1254
-node_cidr: 10.144.67.0/24
+node_iface: eth1
+ext_iface: eth0
+node_cidr: 10.100.0.0/24
 pod_cidr: 10.244.0.0/14                 # 须通过阶段 00 网段冲突检查
 service_cidr: 10.96.0.0/12
 extra_nets: []                          # 路由表看不到但实际存在的网段（Harbor/存储/运维）
 
 ## VIP（keepalived，内外独立漂移）
-vip: 10.144.67.200                      # 须在 node_cidr 内且未占用
+vip: 10.100.0.200                      # 须在 node_cidr 内且未占用
 vip_prefix: 24
-ext_vip: 10.144.71.200                  # 须在外网网段内且未占用，且与 ext_iface 同网段
+ext_vip: 10.200.0.200                  # 须在外网网段内且未占用，且与 ext_iface 同网段
 ext_vip_prefix: 24
 vip_port: 16443                         # haproxy 与 apiserver 同机时不能是 6443
 ext_api_allowed_cidr:                   # 外网 API 授权网段；不得含 0.0.0.0/0
-  - 10.144.71.0/24
+  - 10.200.0.0/24
 ka_vrid: 51                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
 ka_ext_vrid: 52
 ka_advert_int: 1                        # 修订点 13：内外网统一 1
@@ -41,8 +41,8 @@ ka_unicast_internal: false              # 内网二层禁组播时置 true（单
 ka_unicast_external: false
 
 ## MetalLB（L2）与业务入口
-metallb_ext_range: 10.144.71.210-10.144.71.219   # 须避开节点外网 IP 与 ext_vip
-gw_ext_ip: 10.144.71.210                # 须在 metallb_ext_range 内
+metallb_ext_range: 10.200.0.210-10.200.0.219   # 须避开节点外网 IP 与 ext_vip
+gw_ext_ip: 10.200.0.210                # 须在 metallb_ext_range 内
 gw_tls_secret: gw-ext-tls
 gw_http_redirect: false                 # true 时创建 80→443 的 301 跳转（接管 80 未匹配流量）
 
