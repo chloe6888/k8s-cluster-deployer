@@ -39,7 +39,6 @@
           ext_vip: "{{ ext_vip }}"
           ext_vip_prefix: "{{ ext_vip_prefix | default(24) }}"
           vip_port: "{{ vip_port }}"
-          ext_api_allowed_cidr: "{{ ext_api_allowed_cidr }}"
           ka_auth_pass: "{{ ka_auth_pass | default(None) }}"
           stats_user: "{{ stats_user | default('') }}"
           stats_pass: "{{ stats_pass | default('') }}"

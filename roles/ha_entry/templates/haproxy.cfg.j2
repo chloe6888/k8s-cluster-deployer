@@ -1,5 +1,4 @@
 # {{ ansible_managed }} —— 手册 3.2；三台相同，仅 stats bind 的本机 IP 不同。
-# 外网 frontend 增加授权网段白名单（实施方案修订点 1）。
 global
         log /dev/log    local0
         log /dev/log    local1 notice
@@ -34,12 +33,10 @@ frontend kube-apiserver
         bind  {{ vip }}:{{ vip_port }}
         default_backend  kube-apiserver-backend
 
-# 外网运维入口：仅授权网段（白名单外直接拒绝，修订点 1）
+# 外网运维入口（源地址白名单已取消，访问控制由网络侧落实，见手册 3.7）
 frontend kube-apiserver-ext
         mode  tcp
         bind  {{ ext_vip }}:{{ vip_port }}
-        acl allowed_src src{% for c in ext_api_allowed_cidr %} {{ c }}{% endfor %}
-        tcp-request connection reject if !allowed_src
         default_backend  kube-apiserver-backend
 
 # 统计页：只监听本机内网 IP，使用独立的短超时

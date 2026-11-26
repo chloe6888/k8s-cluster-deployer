@@ -137,7 +137,6 @@ k8s-cluster-deployer/
   - `pin_kernel`、`purge_old_kernels`（均默认 `false`）；
   - `preload_images`：worker 预拉的业务镜像列表，取代手册里的 `IMAGE_LIST` 文件；
   - `k8s_release_key_sha256`、`k8s_release_key_fingerprint`：`Release.key` 的校验值。
-- 外网 API 的授权网段 `ext_api_allowed_cidr` 必须是列表，且不能包含 `0.0.0.0/0`。
 
 ---
 
@@ -145,7 +144,7 @@ k8s-cluster-deployer/
 
 | # | 手册位置 | 问题 | 实施时的处理 |
 | --- | --- | --- | --- |
-| 1 | 3.2 外网 frontend | 定义了 `EXT_API_ALLOWED_CIDR` 却没使用，外网 16443 实际对所有来源开放 | 外网 frontend 增加源地址白名单，不在白名单内的连接直接拒绝 |
+| 1 | 3.2 外网 frontend | 定义了 `EXT_API_ALLOWED_CIDR` 却没使用，外网 16443 实际对所有来源开放 | 外网 frontend 增加源地址白名单，不在白名单内的连接直接拒绝。**2026-11-26 随决策 #37 取消**：白名单与 `ext_api_allowed_cidr` 变量移除，外网入口访问控制由网络侧（安全组 / 防火墙）落实 |
 | 2 | 5.4 `certSANs` | 缺外网 VIP，运维机经外网 VIP 访问 API 会证书校验失败 | 加入 `ext_vip`；另加 `localhost`、`127.0.0.1`，额外地址由各集群 inventory 的 `extra_cert_sans` 提供 |
 | 3 | 3.1、3.3 | 健康检查脚本用到 `socat`，但没有安装 | 与 HAProxy 一起安装 |
 | 4 | 4.2 | 提到 Harbor CA 与 `hosts.toml`，但没有写入节点的步骤 | 阶段 30 补：写入 CA、写 `hosts.toml`、设置 containerd 的 `config_path` |
@@ -174,7 +173,7 @@ k8s-cluster-deployer/
 - **步骤**：
   1. 确认系统是 Ubuntu 24.04、x86_64，且以 root 登录。
   2. 检查手册 1.3 中必填的变量都已填写，列表类变量不为空。
-  3. 检查取值：`cluster_prefix` 全小写；`ext_api_allowed_cidr` 非空且不含 `0.0.0.0/0`；`vip_port` 不是 6443；`ka_auth_pass` 不超过 8 位；`vip` 与 `ext_vip` 不相同；`gw_ext_ip` 必须在 `metallb_ext_range` 内；内网 VIP 在 `node_cidr` 内，外网 VIP 与 `ext_iface` 同网段；三台 master 的 `ka_state/ka_priority` 分别为 MASTER/100、BACKUP/90、BACKUP/80。
+  3. 检查取值：`cluster_prefix` 全小写；`vip_port` 不是 6443；`ka_auth_pass` 不超过 8 位；`vip` 与 `ext_vip` 不相同；`gw_ext_ip` 必须在 `metallb_ext_range` 内；内网 VIP 在 `node_cidr` 内，外网 VIP 与 `ext_iface` 同网段；三台 master 的 `ka_state/ka_priority` 分别为 MASTER/100、BACKUP/90、BACKUP/80。
   4. 检查唯一性：全部节点的 `machine-id`、`product_uuid`、`node_ip`、`node_name` 互不相同（克隆机最容易重复，重复会导致 join 异常）。
   5. 检查网卡与路由（手册 2.1）：`node_iface`、`ext_iface` 存在；`node_ip` 在 `node_iface` 上；默认路由只有一条且在 `ext_iface` 上；Harbor 域名能解析，且访问 Harbor 的路由走 `node_iface`。
   6. 检查系统包能装：`apt-get update` 成功，`haproxy`、`keepalived`、`socat`、`chrony`、`nftables`、`gnupg` 在内网 apt 站都有候选版本。
@@ -225,7 +224,7 @@ k8s-cluster-deployer/
 - **步骤**：
   1. 安装 `haproxy`、`keepalived`、`socat`（修订点 3）；首次安装后先停止两个服务，配置完成前不启动。
   2. **HAProxy 配置**（手册 3.2，三台相同，只有统计页绑定的 `node_ip` 不同）：
-     - 内网 frontend 绑定 `vip:vip_port`；外网 frontend 绑定 `ext_vip:vip_port`，**并增加授权网段白名单**（修订点 1）；
+     - 内网 frontend 绑定 `vip:vip_port`；外网 frontend 绑定 `ext_vip:vip_port`（源地址白名单已随决策 #37 取消）；
      - 后端三台 master 的 6443，服务器名取各自的 `node_name`；
      - 统计页账号用 `stats_user`、`stats_pass`；配置文件权限 0640（含密码）；
      - 写入前用 `haproxy -c` 校验。
@@ -238,7 +237,7 @@ k8s-cluster-deployer/
   - master01 持有内外两个 VIP；
   - 每台 master 上 `vip:vip_port`、`ext_vip:vip_port` 都能连通；
   - 两个服务都在运行并已设为开机启动。
-- **不放进主流程的检查**（会停 HAProxy 或需要外部探测机，放在阶段 90 的 `failover`、`probe` 标签里，需要时单独执行）：漂移演练（手册 3.6）；从非授权网段的探测机访问外网 VIP，必须被拒绝；手册 3.7 要求的 `6443/2379/10250` 外网探测必须全部不通（由网络侧 ACL 落实，是上线准入项）。
+- **不放进主流程的检查**（会停 HAProxy 或需要外部探测机，放在阶段 90 的 `failover`、`probe` 标签里，需要时单独执行）：漂移演练（手册 3.6）；手册 3.7 要求的 `6443/2379/10250` 外网探测必须全部不通（由网络侧 ACL 落实，是上线准入项）。
 
 ### 6.5 阶段 30：容器运行时
 
@@ -388,7 +387,7 @@ k8s-cluster-deployer/
   - etcd：全部 healthy。
 - **默认不执行的检查**（需要用标签单独指定）：
   - `failover`：VIP 漂移演练——停掉持有 VIP 的 HAProxy，确认两个 VIP 迁走，恢复后 master01 抢回；会短暂影响 API 入口，只在测试环境做；
-  - `probe`：从非授权网段的探测机（`delegate_to`）对外网 VIP 访问、对 master 外网 IP 的 6443/2379/10250 做探测，必须全部不通。
+  - `probe`：从探测机（`delegate_to`）对 master 外网 IP 的 6443/2379/10250 做探测，必须全部不通（网络侧准入项）。
 - **可选连通性测试**（手册 9.2，默认不执行，需要指定 `busybox_tag`）：测试 DNS 解析，以及在两个不同节点上各起一个 Pod 互相 ping，测完无论成败都删除测试 Pod。
 
 ### 6.14 阶段 99：重置（可选，单独执行）

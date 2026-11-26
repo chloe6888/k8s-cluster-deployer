@@ -103,15 +103,15 @@
           changed_when: false
           check_mode: false
 
-        # 约 1 分钟：20 次 × 3 秒。内网 VIP：接管后 apiserver 端口经 VIP 可达；
-        # 外网 VIP：haproxy frontend 有源地址 ACL，TCP 探测会被拒而误判，
-        # 改用 ICMP——keepalived 持有 VIP 即应答 ARP/ping
+        # 约 1 分钟：20 次 × 3 秒。接管后两个 frontend 端口经各自 VIP 均可达
+        # （外网 frontend 的源地址白名单已取消，TCP 探测不再被拒）
         - name: Verify another master took over both VIPs
           ansible.builtin.shell:
             cmd: |
               set -o pipefail
               timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' \
-                && ping -c 1 -W 3 {{ ext_vip }} >/dev/null && echo takeover-ok
+                && timeout 5 bash -c 'echo > /dev/tcp/{{ ext_vip }}/{{ vip_port }}' \
+                && echo takeover-ok
           delegate_to: "{{ groups['masters'][0] }}"
           run_once: true
           register: vf_failover_check

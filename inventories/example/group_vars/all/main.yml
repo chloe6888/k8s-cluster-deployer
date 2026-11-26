@@ -31,8 +31,6 @@ vip_prefix: 24
 ext_vip: 10.200.0.200                  # 须在外网网段内且未占用，且与 ext_iface 同网段
 ext_vip_prefix: 24
 vip_port: 16443                         # haproxy 与 apiserver 同机时不能是 6443
-ext_api_allowed_cidr:                   # 外网 API 授权网段；不得含 0.0.0.0/0
-  - 10.200.0.0/24
 extra_cert_sans: []                     # apiserver 证书附加 SAN（DNS 名或 IP，如前置 NGINX/负载均衡地址）
 ka_vrid: 51                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
 ka_ext_vrid: 52

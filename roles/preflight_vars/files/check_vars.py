@@ -61,14 +61,6 @@ svc_cidr = cidr(need("service_cidr"), "service_cidr")
 vip = ip(need("vip"), "vip")
 ext_vip = ip(need("ext_vip"), "ext_vip")
 
-# 授权网段：非空列表、每项合法、不得 0.0.0.0/0
-allowed = need("ext_api_allowed_cidr")
-if allowed is not None:
-    for c in allowed:
-        n = cidr(c, "ext_api_allowed_cidr 条目")
-        if n is not None and n == ipaddress.ip_network("0.0.0.0/0"):
-            bad("ext_api_allowed_cidr 不得包含 0.0.0.0/0（手册 1.3）")
-
 # vip_port 不能是 6443（haproxy 与 apiserver 同机）
 port = V.get("vip_port")
 if not isinstance(port, int) or port <= 0 or port > 65535:
