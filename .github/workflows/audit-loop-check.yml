@@ -1,0 +1,59 @@
+name: Temporary loop-register semantics check
+
+on:
+  push:
+    branches:
+      - audit/review-d43f929
+    paths:
+      - ".github/workflows/audit-loop-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  loop-semantics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/review-d43f929
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ansible-core
+        run: python -m pip install ansible-core
+      - name: Test the exact register.results[index] failure pattern
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/test-loop.yml <<'EOF'
+          ---
+          - name: Test registered loop aggregate during failed_when
+            hosts: localhost
+            connection: local
+            gather_facts: false
+            tasks:
+              - name: Stat two existing paths using the same failed_when pattern as the repository
+                ansible.builtin.stat:
+                  path: "{{ item }}"
+                loop:
+                  - /etc/hosts
+                  - /etc/passwd
+                register: preflight_ifaces
+                failed_when: not preflight_ifaces.results[idx].stat.exists
+                loop_control:
+                  index_var: idx
+              - name: Show aggregate results after the loop
+                ansible.builtin.debug:
+                  var: preflight_ifaces.results
+          EOF
+          set +e
+          ansible-playbook /tmp/test-loop.yml > /tmp/test-loop.out 2>&1
+          rc=$?
+          set -e
+          cat /tmp/test-loop.out
+          if [ "$rc" -ne 0 ]; then
+            echo "LOOP_REGISTER_PATTERN_FAILED"
+          else
+            echo "LOOP_REGISTER_PATTERN_PASSED"
+          fi
