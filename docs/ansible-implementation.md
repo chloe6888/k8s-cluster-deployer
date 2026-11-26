@@ -147,11 +147,11 @@ k8s-cluster-deployer/
 | # | 手册位置 | 问题 | 实施时的处理 |
 | --- | --- | --- | --- |
 | 1 | 3.2 外网 frontend | 定义了 `EXT_API_ALLOWED_CIDR` 却没使用，外网 16443 实际对所有来源开放 | 外网 frontend 增加源地址白名单，不在白名单内的连接直接拒绝 |
-| 2 | 5.4 `certSANs` | 缺外网 VIP，运维机经外网 VIP 访问 API 会证书校验失败 | 加入 `ext_vip` |
+| 2 | 5.4 `certSANs` | 缺外网 VIP，运维机经外网 VIP 访问 API 会证书校验失败 | 加入 `ext_vip`；另加 `localhost`、`127.0.0.1`，额外地址由各集群 inventory 的 `extra_cert_sans` 提供 |
 | 3 | 3.1、3.3 | 健康检查脚本用到 `socat`，但没有安装 | 与 HAProxy 一起安装 |
 | 4 | 4.2 | 提到 Harbor CA 与 `hosts.toml`，但没有写入节点的步骤 | 阶段 30 补：写入 CA、写 `hosts.toml`、设置 containerd 的 `config_path` |
 | 5 | 5.4 | `etcd` 配置放在 `KubeProxyConfiguration` 之后，会被当作 kube-proxy 的字段 | 放回 `ClusterConfiguration` 内，与 `networking` 同级 |
-| 6 | 5.4 `taints` | 使用旧的 `node-role.kubernetes.io/master`，且 master02、03 的 join 不读这份配置，三台污点不一致 | 整段删除，使用 kubeadm 默认的 `control-plane` 污点 |
+| 6 | 5.4 `taints` | 使用旧的 `node-role.kubernetes.io/master`，且 master02、03 的 join 不读这份配置，三台污点不一致 | 整段改为显式 `taints: []`：master 可调度业务 Pod（2026-11-26 决定），init 与 join 配置保持一致 |
 | 7 | 5.4 | `podSubnet`、`serviceSubnet`、`nodePortAddresses` 写死 | 改用 `pod_cidr`、`service_cidr`、`node_cidr` |
 | 8 | 5.4 | `criSocket` 为 `/var/run/containerd/containerd.sock` | 改为 `/run/containerd/containerd.sock`，与 crictl 配置一致 |
 | 9 | 3.3 | 健康检查脚本用不带引号的 heredoc 生成，`$i`、`${PORT}` 会在生成时被提前展开 | 用模板渲染，只替换端口，shell 变量原样保留 |
@@ -265,14 +265,15 @@ k8s-cluster-deployer/
 
 ### 6.6 阶段 40：Kubernetes 软件包
 
-- **目标**：落实手册 5.1、5.2。
-- **主机**：全部节点，并行。
+- **目标**：落实手册 5.1、5.2，并安装 helm。
+- **主机**：全部节点，并行；helm 只装在 master。
 - **步骤**：
   1. **公钥核对**：下载 `Release.key`，核对 sha256 与 GPG 指纹（分别对照 `k8s_release_key_sha256`、`k8s_release_key_fingerprint`），**不一致立即停止**——这把公钥的可信度只靠内网镜像站，必须核对；通过后转成 apt 使用的 keyring。
   2. **配置 apt 源**：写入 `apt_k8s_url`；执行 `apt update`；确认 `kubeadm` 的候选版本含 1.36.6，且来源是内网镜像站。
   3. **安装**：`kubelet`、`kubeadm`、`kubectl` 固定为 1.36.6，并 hold；kubelet 只设为开机启动，**不要启动**。
-  4. **固定节点 IP**：写入 `/etc/default/kubelet`，内容为 `--node-ip=<本机 node_ip>`（双网卡节点必须在 init/join 之前完成）。
+  4. **固定节点 IP**：写入 `/etc/default/kubelet`，内容为 `--node-ip=<本机 node_ip>`（双网卡节点必须在 init/join 之前完成）。**这是全部节点 node-ip 的唯一来源**：worker 用 `kubeadm token create --print-join-command` 的命令行加入、没有配置文件，必须靠它；因此 kubeadm 的 init / join 配置里不再写 `kubeletExtraArgs`。
   5. **crictl**：没有就安装 `cri-tools` 并 hold；写入 `/etc/crictl.yaml`，指向 containerd 的 socket。
+  6. **安装 helm**（只在 master）：获取并校验 `helm-v3.22.1-linux-amd64.tar.gz`，按版本号建解压目录再复制到 `/usr/local/bin/helm`，随后用 `helm version --short` 校验版本。Calico、MetalLB、Envoy Gateway 阶段由 master01 调用它。
 - **验证**：`kubeadm version` 为 v1.36.6；`apt-mark showhold` 含 kubelet、kubeadm、kubectl、cri-tools；`crictl info` 正常。
 
 ### 6.7 阶段 50：初始化 master01
@@ -280,14 +281,14 @@ k8s-cluster-deployer/
 - **目标**：落实手册 5.4、5.5、5.7。
 - **主机**：master01。
 - **步骤**：
-  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8（`certSANs` 加外网 VIP；`etcd` 放进 `ClusterConfiguration`；不写污点；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`）。配置文件权限 0600。
+  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、外网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
   2. 用 `kubeadm config validate` 校验配置，不通过就停止。
-  3. 只在 `/etc/kubernetes/admin.conf` 不存在时执行：`kubeadm config images pull`，再执行 `kubeadm init --upload-certs`，输出保存到日志（日志含 join 凭据，权限 0600；任务本身关闭输出显示）。
+  3. 只在集群尚未初始化时执行（判据：apiserver 中不存在 `kube-system/kubeadm-config`；不用 `admin.conf` 是否存在来判断，因为 init 中途失败也会留下它）：先确认 `vip:vip_port` 可连，再 `kubeadm config images pull`，再 `kubeadm init --config`。不加 `--upload-certs`，join 凭据由 6.8 每台现生成；init 输出不屏蔽，失败时能直接看到原因。
   4. 把 `admin.conf` 复制到 `~/.kube/config`，权限 0600。
-  5. **安装 Helm**：获取并校验压缩包，当前版本不是 3.22.1 才安装；确认版本不低于 3.8。
+  5. **证书有效期校验**：用 `openssl x509 -checkend 599184000`（19 年）确认 `ca.crt` 与 `apiserver.crt` 确已按 20 年签发。helm 不在本阶段安装，已移到阶段 40（6.6 第 6 步）。
 - **验证**：
   - apiserver 的 `/readyz` 返回 ok；
-  - `kubeadm certs check-expiration` 显示叶子证书约 10 年、CA 约 20 年；
+  - `kubeadm certs check-expiration` 显示叶子证书与 CA 均约 20 年；
   - etcd 静态 Pod 的参数里 `quota-backend-bytes` 等于 `etcd_quota_bytes`；
   - 节点此时显示 `NotReady` 属正常（Calico 还没装），**不要对 Ready 做断言**。
 
@@ -297,11 +298,11 @@ k8s-cluster-deployer/
 - **主机**：master02、master03，**逐台执行，一台完成并通过闸门后才开始下一台**。
 - **步骤**（对每一台）：
   1. 确认该节点的 `/etc/default/kubelet` 里是本机 `node_ip`，且能连通 `vip:vip_port`。
-  2. 在 master01 上**现生成**凭据（`certificate-key` 只有 2 小时有效，所以每台 join 前都重新生成）：执行 `kubeadm init phase upload-certs --upload-certs` 取得 `certificate-key`，执行 `kubeadm token create --print-join-command` 取得 token 与 hash。这些值只在内存中传递，不写入日志和文件。
-  3. 在该节点执行 `kubeadm join <vip>:<vip_port>`，带 `--control-plane`、`--certificate-key`、**`--apiserver-advertise-address=<本机 node_ip>`**（必须带，否则双网卡下 etcd peer 可能用错地址）、`--node-name`。已存在 `kubelet.conf` 则跳过。
+  2. 在 master01 上**现生成**凭据（`certificate-key` 只有 2 小时有效，所以每台 join 前都重新生成）：`kubeadm token create --ttl 1h` 取得 token，计算 CA 公钥 hash，`kubeadm init phase upload-certs --upload-certs` 取得 `certificate-key`。这些任务都 `no_log`。
+  3. 渲染本节点专用的 JoinConfiguration（权限 0600，含 token 与 certificate-key；`apiserverAdvertiseAddress=<本机 node_ip>`，必须带，否则双网卡下 etcd peer 可能用错地址；`taints: []`），再执行 `kubeadm join --config`；已存在 `kubelet.conf` 则跳过。join 命令的命令行不含凭据，输出也不屏蔽，失败时直接可见；配置文件在 `always` 中删除，成功或失败都不遗留。
   4. 把 `admin.conf` 复制到该节点的 `~/.kube/config`。
   5. **闸门**（修订点 12）：反复检查（最多约 5 分钟），直到新节点的 etcd、kube-apiserver、kube-controller-manager、kube-scheduler 四个静态 Pod 都在运行，并且 etcd 成员数等于已加入的 master 数、`endpoint health --cluster` 全部 healthy。
-  6. `kubeadm certs check-expiration` 同样应为约 10 年。
+  6. `kubeadm certs check-expiration` 同样应为约 20 年。
 - **验证**：三个 etcd 成员健康；三台 master 的证书有效期符合预期。
 
 ### 6.9 阶段 60：Calico 3.32.2
@@ -311,11 +312,12 @@ k8s-cluster-deployer/
 - **步骤**：
   1. 获取并校验两个 Chart：`tigera-operator-v3.32.2.tgz` 与 `crd.projectcalico.org.v1-v3.32.2.tgz`（**CRD Chart 不能漏**）。
   2. **nft 预检**（强制）：在节点上用 `calico/node:v3.32.2` 镜像运行 `nft list tables`，返回码必须是 0。3.32.0 的 nft 曾在这里崩溃，不通过就不要继续。
-  3. **安装 CRD**：用 `helm template` 渲染 CRD Chart，再用 **server-side apply** 应用（CRD 太大，普通 apply 会超出注解长度上限）；创建 `tigera-operator` 命名空间。
+  3. **安装 CRD**：用 `helm template --include-crds` 渲染 CRD Chart 到文件，用 `kubectl diff --server-side` 判断有无差异，有差异才 **server-side apply**（CRD 太大，普通 apply 会超出注解长度上限）。`tigera-operator` 命名空间由 `helm upgrade --install --create-namespace` 创建。
   4. **渲染 values**（手册 6.4）：`manageCRDs: false`；`registry` 为 `${REGISTRY}/`（结尾要有斜杠）；BGP 开启；节点地址探测用 `node_cidr`；IP 池为 `pod_cidr`、IPIP、`blockSize 25`、`natOutgoing`；启用 apiServer；**显式关闭 goldmane 与 whisker**；operator 镜像 `tigera/operator:v1.42.6`；不设置 `imagePath`。
-  5. **镜像核对**：用 `helm template … | grep image:` 检查渲染结果，所有镜像都必须以 `${REGISTRY}/` 开头。
-  6. 安装 operator（`helm upgrade --install`），等待 operator 部署完成。
-  7. 等待 `tigerastatus` 全部为 Available（最多约 10 分钟），再等待所有节点 Ready。
+  5. **安装 operator**（`helm upgrade --install --history-max 5`）：只在 release 不存在、状态不是 `deployed`、chart 版本变化或 values 文件有变化时执行。
+  6. 等待 `tigerastatus` 全部为 Available（最多约 10 分钟）。
+  7. **镜像核对**：核对 `calico-system` 里实际运行的 Pod 镜像都以 `${REGISTRY}/` 开头。`helm template` 的结果只含 operator 自己的镜像，其余组件镜像由 operator 按 `Installation.spec.registry` 在运行时生成，所以必须在安装后检查。
+  8. 等待所有节点 Ready（最多约 10 分钟）。
 - **验证**：IP 池的网段、IPIP Always、`blockSize 25`、`natOutgoing` 与配置一致；`calico-system` 里 `calico-node` 全部 Ready；三台 master 都是 `Ready`。
 
 ### 6.10 阶段 70：加入 worker
@@ -379,7 +381,7 @@ k8s-cluster-deployer/
   - 内核与锁定：`uname -r` 与 hold 列表（所有节点）；
   - inotify 三项为 8192 / 1048576 / 65536（所有节点）；
   - kube-proxy：模式为 nftables，`nodePortAddresses` 为 `node_cidr`；
-  - 证书：每台 master 叶子约 10 年、CA 约 20 年；
+  - 证书：每台 master 叶子与 CA 均约 20 年；
   - Calico：`tigerastatus` 全部 Available；IPIP Always、`/25`、`natOutgoing`；
   - VIP：内、外网 VIP 各只在一台 master 上；
   - kubelet 配置：`maxPods`、预留、驱逐阈值（含 `nodefs.inodesFree`）、日志轮转与配置一致（所有节点）；
@@ -451,7 +453,7 @@ k8s-cluster-deployer/
 - kubectl 与 helm 步骤先用 `command`，稳定后再考虑替换。
 - containerd 的 `config.toml`：在测试机上用 2.3.0 生成基线并确认三项（pause、`SystemdCgroup`、`config_path`）后，固化成完整模板，不用 sed。
 - `purge_old_kernels` 默认 `false`。
-- 证书有效期按手册 5.4 的配置：叶子证书 10 年（87600h）、CA 20 年（175200h）；验收按 `kubeadm certs check-expiration` 的实际输出断言。手册 5.4 与 9.1 对此的说法一致，不需要再确认。
+- 证书有效期：叶子证书与 CA 均 20 年（`175200h`，2026-11-26 由叶子 10 年改为 20 年；叶子不得超过 CA）；init 阶段用 `openssl -checkend` 校验，验收按 `kubeadm certs check-expiration` 的实际输出断言。
 - 重置、漂移演练、外网探测默认不执行。
 
 ### 待确认

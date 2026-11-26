@@ -79,7 +79,7 @@
           ansible.builtin.set_fact:
             verify_failures: "{{ verify_failures + [verify_node ~ ' swap 未关闭'] }}"
 
-        # 手册 9.1：证书年限修订后叶子 ~10 年 / CA ~20 年
+        # 手册 9.1：证书有效期叶子 ~20 年 / CA ~20 年（决策 #19，2026-11-26）
         - name: Check master certificate lifetimes
           when: inventory_hostname in groups['masters']
           block:
