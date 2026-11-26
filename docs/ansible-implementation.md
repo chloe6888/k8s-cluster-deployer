@@ -56,7 +56,7 @@ k8s-cluster-deployer/
 │   ├── files/harbor-ca.crt      # 集群专属，.gitignore
 │   ├── group_vars/all/main.yml  # 原 k8s-deploy.env
 │   ├── group_vars/all/vault.yml # 原 k8s-secrets.env（ansible-vault 加密）
-│   └── host_vars/<节点>.yml     # 原 node.env
+│   └── host_vars/k8s-master0*.yml  # 原 node.env（master 专属；worker 变量内联在 hosts.yml）
 ├── playbooks/                   # 00 ~ 90、99、site.yml
 └── roles/
 ```
@@ -64,7 +64,7 @@ k8s-cluster-deployer/
 **贯穿全局的约定**
 
 1. **换集群 = 换一个 inventory 目录**，role 里不出现任何集群专属值。
-2. **`node_ip` 必须显式写进 host_vars**，不用 `ansible_default_ipv4`（默认路由在外网网卡，会取到外网 IP）；预检断言 `node_ip` 落在 `node_cidr` 内。
+2. **`node_ip` 必须显式写入**（worker 内联在 `hosts.yml`，master 在 `host_vars/`），不用 `ansible_default_ipv4`（默认路由在外网网卡，会取到外网 IP）；预检断言 `node_ip` 落在 `node_cidr` 内。
 3. **vault 文件必须放在 `group_vars/all/` 目录里**才会被自动加载（放成 `group_vars/vault.yml` 不会生效，因为没有名叫 `vault` 的组）。
 4. **离线依赖**：控制机也要离线可用，collection 用 `ansible-galaxy collection download` 入库。kubectl 与 helm 步骤用 `command`（行为与手册完全一致，排障直观，被管节点也不需要 Python `kubernetes` 库），稳定后再考虑换成 `kubernetes.core`。
 5. **下载校验**：文件站模式用 `get_url` 的 `checksum` 参数指向 `SHA256SUMS`；仓库模式在控制机校验后推送；校验失败即停止。
@@ -118,7 +118,7 @@ k8s-cluster-deployer/
 | --- | --- | --- |
 | 1.3 ① 集群公共变量 | `group_vars/all/main.yml` | `REGISTRY`、`FILE_URL` 由 `harbor`、`mirror` 派生，用 Jinja 拼接，不重复填写 |
 | 1.3 ② 密码变量 | `group_vars/all/vault.yml`（加密） | `ka_auth_pass`（≤8 位，预检断言）、`stats_user`、`stats_pass`、`gw_tls_cert`、`gw_tls_key` |
-| 1.3 ③ 节点变量 | `host_vars/<节点>.yml` | `node_ip`、`node_ext_ip`、`ka_state`、`ka_priority`；master01/02/03 对应 MASTER 100 / BACKUP 90 / BACKUP 80，预检断言，防止写错 |
+| 1.3 ③ 节点变量 | worker 内联 `hosts.yml`；master 在 `host_vars/` | `node_ip`、`node_ext_ip`（master 另有 `ka_state`、`ka_priority`，01/02/03 对应 MASTER 100 / BACKUP 90 / BACKUP 80，预检断言，防止写错）。两种写法 Ansible 等价，断言读的是 hostvars |
 | `NTP_SERVER`、`EXTRA_NETS` | 列表 `ntp_servers`、`extra_nets` | 手册里是空格分隔的字符串，Ansible 里改成 YAML 列表 |
 | `IMAGE_LIST` | 列表 `preload_images` | 取代手册里的清单文件 |
 | 组件版本（手册 1.1） | `config/versions.yml` | 各 playbook 引入，不在 `main.yml` 里重复 |
@@ -126,7 +126,7 @@ k8s-cluster-deployer/
 注意事项：
 
 - `vault.yml` 必须放在 `group_vars/all/` 目录里才会被自动加载。
-- `node_ip` 必须直接写入 host_vars，**不要用 `ansible_default_ipv4`**（默认路由在外网网卡，会取到外网 IP）。
+- `node_ip` 必须显式写入（worker 内联 `hosts.yml`、master `host_vars/`），**不要用 `ansible_default_ipv4`**（默认路由在外网网卡，会取到外网 IP）。
 - 新增的变量（手册 1.3 里没有）：
   - `stats_user`、`stats_pass`：把手册的 `STATS_AUTH` 拆成两个；
   - `gw_tls_cert`、`gw_tls_key`、`gw_tls_secret`（默认 `gw-ext-tls`）：Gateway 的 HTTPS 证书；

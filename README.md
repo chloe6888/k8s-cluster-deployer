@@ -12,7 +12,7 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 | `templates/` | Jinja2 配置模板（containerd systemd 单元） |
 | `scripts/` | 资源下载 / 校验 / 展平打包工具 |
 | `ansible.cfg`、`requirements.yml`、`collections/` | Ansible 控制机配置与离线 collection |
-| `inventories/example/` | 带完整注释的参考样例（hosts/group_vars/host_vars）；真实集群 inventory 只存部署机本地，不入本仓库 |
+| `inventories/example/` | 带完整注释的参考样例（hosts 内联 worker 变量 / group_vars / master host_vars）；真实集群 inventory 只存部署机本地，不入本仓库 |
 | `playbooks/` | 分步 playbook：preflight → os-baseline → ha-entry → container-runtime → k8s-packages → init-master/join-masters → calico → join-workers → metallb → envoy-gateway → verify；kernel-pin 与 reset 单独执行 |
 | `roles/` | 各步骤实现，配置内容以《部署手册》对应章节为准 |
 | `docs/` | `DECISIONS.md` 决策记录、`ansible-implementation.md` 实施方案 |
