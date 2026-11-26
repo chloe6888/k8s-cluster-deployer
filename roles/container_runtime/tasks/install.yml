@@ -24,11 +24,11 @@
       check_mode: false
 
     # 已是目标版本就不动，避免重复解压产生双版本；不能加 creates: /usr/local/bin/containerd，
-    # 否则版本升级被旧文件挡住。2.x 输出形如
-    # "containerd github.com/containerd/containerd/v2 2.3.0 <commit>"——版本号无 v 前缀、
-    # 前面是空格、后面还可能有 commit，锚点必须是 " <版本>(空白或行尾)"
+    # 否则版本升级被旧文件挡住。仓库自带的 2.3.0 二进制实测输出为
+    # "containerd github.com/containerd/containerd/v2 v2.3.0 <commit>"——版本号带 v 前缀、后面跟 commit
+    # （apt 构建的 2.2.1 实测无 v 前缀），所以锚点取 "(行首或空白)(可选 v)<版本>(空白或行尾)"，两种写法都认
     - name: Extract to /usr/local (bin/* only, avoiding dual versions)
-      when: runtime_containerd_ver.stdout is not search(' ' ~ containerd_version ~ '(\s|$)')
+      when: runtime_containerd_ver.stdout is not search('(^|\s)v?' ~ (containerd_version | regex_escape) ~ '(\s|$)')
       ansible.builtin.unarchive:
         src: "{{ package_dir }}/containerd-{{ containerd_version }}-linux-amd64.tar.gz"
         dest: /usr/local

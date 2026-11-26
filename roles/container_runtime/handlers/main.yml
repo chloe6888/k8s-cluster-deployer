@@ -1,5 +1,5 @@
 ---
-# 顺序不可换：先 daemon-reload 再重启，notify 列表 [Reload systemd, Restart containerd] 才有意义
+# handler 按本文件中的定义顺序执行（与 notify 列表的写法顺序无关），所以 Reload systemd 必须排在 Restart containerd 之前
 - name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true

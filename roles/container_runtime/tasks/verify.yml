@@ -11,13 +11,13 @@
       failed_when: runtime_containerd_active.stdout | trim != 'active'
       check_mode: false
 
-    # 2.x 版本号无 v 前缀、后面可能跟 commit，锚点与 install.yml 一致（见该处注释）
+    # 实测输出 "... /v2 v2.3.0 <commit>"：版本号带 v 前缀、后面跟 commit，锚点与 install.yml 一致（见该处注释）
     - name: Verify the containerd version is {{ containerd_version }}
       ansible.builtin.command:
         cmd: containerd --version
       register: runtime_containerd_ver
       changed_when: false
-      failed_when: runtime_containerd_ver.stdout is not search(' ' ~ containerd_version ~ '(\s|$)')
+      failed_when: runtime_containerd_ver.stdout is not search('(^|\s)v?' ~ (containerd_version | regex_escape) ~ '(\s|$)')
       check_mode: false
 
     - name: Verify the runc version is {{ runc_version }}
@@ -25,5 +25,5 @@
         cmd: runc --version
       register: runtime_runc_ver
       changed_when: false
-      failed_when: runtime_runc_ver.stdout is not search('runc version ' ~ runc_version)
+      failed_when: runtime_runc_ver.stdout is not search('runc version ' ~ (runc_version | regex_escape))
       check_mode: false
