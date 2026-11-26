@@ -1,5 +1,5 @@
 ---
-# master02/03 加入控制面。kubectl/etcd 核对统一 delegate 到 master01。
+# k8s-master02/03 加入控制面。kubectl/etcd 核对统一 delegate 到 k8s-master01。
 - name: Join the control plane
   tags: [kubeadm]
   environment:
@@ -21,13 +21,13 @@
         # 1h TTL；输出即凭据，no_log
         - name: Create a fresh bootstrap token
           ansible.builtin.command:
-            cmd: kubeadm token create
+            cmd: kubeadm token create --ttl 1h
           delegate_to: "{{ groups['masters'][0] }}"
           register: jm_token
           changed_when: false
           no_log: true
 
-        # 手册 5.5：discovery-token-ca-cert-hash
+        # discovery-token-ca-cert-hash
         - name: Compute the CA public key hash
           ansible.builtin.shell:
             cmd: >-
@@ -37,7 +37,7 @@
           register: jm_ca_hash
           changed_when: false
 
-        # 手册 5.5：输出含 certificate-key，no_log
+        # 输出含 certificate-key，no_log
         - name: Re-upload control-plane certificates
           ansible.builtin.command:
             cmd: kubeadm init phase upload-certs --upload-certs
@@ -46,7 +46,7 @@
           changed_when: false
           no_log: true
 
-        # 手册 5.5：文件含 certificate-key，渲染本身 no_log
+        # 文件含 certificate-key，渲染本身 no_log
         - name: Render this node's join configuration
           ansible.builtin.template:
             src: kubeadm-join-controlplane.yml.j2
@@ -54,31 +54,32 @@
             mode: "0600"
           no_log: true
 
-        # 手册 5.5：幂等由 kubelet.conf 存在性把关；失败看 journalctl -u kubelet
+        # 幂等由 kubelet.conf 存在性把关；命令行只引用配置文件、不含 token，
+        # 输出也不打印凭据，所以不加 no_log，失败时能直接看到 kubeadm 的报错
         - name: Run kubeadm join --control-plane
           ansible.builtin.command:
             cmd: kubeadm join --config /etc/kubeadm/kubeadm-join-controlplane.yml
           args:
             creates: /etc/kubernetes/kubelet.conf
-          no_log: true
 
         - name: Report join completion
           ansible.builtin.debug:
             msg: "{{ node_name }} 已作为控制面节点加入（advertise {{ node_ip }}:6443）"
 
-        # 手册 7：凭据落盘即清理
-        - name: Remove the join configuration containing the key
-          ansible.builtin.file:
-            path: /etc/kubeadm/kubeadm-join-controlplane.yml
-            state: absent
-
       rescue:
         - name: Advise on join failure
           ansible.builtin.fail:
             msg: >-
-              {{ node_name }} join 失败（输出已因含凭据被屏蔽）。
+              {{ node_name }} join 失败（kubeadm 的报错见上一条任务输出）。
               排查：journalctl -u kubelet -e 、crictl ps -a、master01 上 kubectl get pods -n kube-system。
               修复后重跑 join-masters.yml（幂等，已完成节点自动跳过）。
+
+      # 手册 7：含 token / certificate-key 的配置文件无论成功失败都要删除
+      always:
+        - name: Remove the join configuration containing the key
+          ansible.builtin.file:
+            path: /etc/kubeadm/kubeadm-join-controlplane.yml
+            state: absent
 
     - name: Prepare the root kubeconfig
       block:

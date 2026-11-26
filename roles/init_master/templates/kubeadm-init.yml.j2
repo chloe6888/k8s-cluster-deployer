@@ -29,8 +29,6 @@ apiServer:
 {% for san in extra_cert_sans | default([]) %}
   - {{ san }}
 {% endfor %}
-  - 10.224.26.45                        # NGINX_IP_CLOUD
-  - 10.32.33.99                         # NGINX_IP_MS
   - localhost
   - 127.0.0.1
 certificateValidityPeriod: 175200h         # 叶子证书 20 年（默认 8760h）
