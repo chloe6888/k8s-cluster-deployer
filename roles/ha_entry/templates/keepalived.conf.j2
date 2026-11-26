@@ -21,15 +21,6 @@ vrrp_instance VI_INTERNAL {
     virtual_router_id {{ ka_vrid }}
     priority {{ ka_priority }}
     advert_int {{ ka_advert_int }}
-{% if ka_unicast_internal | bool %}
-    # 单播变体（二层禁组播时）：内网实例填三台内网 IP
-    unicast_src_ip {{ node_ip }}
-    unicast_peer {
-{% for h in groups['masters'] if h != inventory_hostname %}
-        {{ hostvars[h]['node_ip'] }}
-{% endfor %}
-    }
-{% endif %}
 
     virtual_ipaddress {
         {{ vip }}/{{ vip_prefix }} dev {{ node_iface }}{% if (node_iface ~ ':' ~ ka_vrid) | length <= 15 %} label {{ node_iface }}:{{ ka_vrid }}{% endif %}
@@ -51,15 +42,6 @@ vrrp_instance VI_EXTERNAL {
     virtual_router_id {{ ka_ext_vrid }}
     priority {{ ka_priority }}
     advert_int {{ ka_ext_advert_int }}
-{% if ka_unicast_external | bool %}
-    # 单播变体（二层禁组播时）：外网实例填三台外网 IP
-    unicast_src_ip {{ node_ext_ip }}
-    unicast_peer {
-{% for h in groups['masters'] if h != inventory_hostname %}
-        {{ hostvars[h]['node_ext_ip'] }}
-{% endfor %}
-    }
-{% endif %}
 
     virtual_ipaddress {
         {{ ext_vip }}/{{ ext_vip_prefix }} dev {{ ext_iface }}{% if (ext_iface ~ ':' ~ ka_ext_vrid) | length <= 15 %} label {{ ext_iface }}:{{ ka_ext_vrid }}{% endif %}

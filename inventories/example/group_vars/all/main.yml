@@ -36,8 +36,6 @@ ka_vrid: 51                             # 二层内唯一，部署前 tcpdump vr
 ka_ext_vrid: 52
 ka_advert_int: 1                        # 修订点 13：内外网统一 1
 ka_ext_advert_int: 1
-ka_unicast_internal: false              # 内网二层禁组播时置 true（单播变体，手册 3.4）
-ka_unicast_external: false
 
 ## MetalLB（L2）与业务入口
 metallb_ext_range: 10.200.0.210-10.200.0.219   # 须避开节点外网 IP 与 ext_vip

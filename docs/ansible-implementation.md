@@ -229,7 +229,7 @@ k8s-cluster-deployer/
      - 统计页账号用 `stats_user`、`stats_pass`；配置文件权限 0640（含密码）；
      - 写入前用 `haproxy -c` 校验。
   3. **健康检查脚本**（手册 3.3）：按模板渲染，只替换端口，不展开脚本里的 shell 变量（修订点 9）；属主 root，权限 0755。
-  4. **keepalived 配置**（手册 3.4）：两个实例，状态与优先级取各节点的 `ka_state`、`ka_priority`（master01 为 MASTER/100，master02 BACKUP/90，master03 BACKUP/80）；`weight -30`；`advert_int` 内外网默认都为 1（修订点 13）；网卡标签超过 15 个字符时去掉 `label`；二层禁组播时使用单播变体（需要 master 的 `node_ip` 与 `node_ext_ip`）；写入前用 `keepalived -t` 校验；权限 0600。
+  4. **keepalived 配置**（手册 3.4）：两个实例，状态与优先级取各节点的 `ka_state`、`ka_priority`（master01 为 MASTER/100，master02 BACKUP/90，master03 BACKUP/80）；`weight -30`；`advert_int` 内外网默认都为 1（修订点 13）；网卡标签超过 15 个字符时去掉 `label`（单播变体已随决策 #38 取消，不涉及 `node_ip`/`node_ext_ip`）；写入前用 `keepalived -t` 校验；权限 0600。
   5. **启动依赖**：让 keepalived 在 HAProxy 之后启动（systemd 的 drop-in）。
   6. **启动顺序**：三台 master 同时启动并启用 HAProxy；然后 keepalived **按 master01、02、03 的顺序逐台启动**，master01 启动后要等到两个 VIP 都出现在它身上，再启动下一台。
   7. 对 `haproxy`、`keepalived` 执行 hold。
