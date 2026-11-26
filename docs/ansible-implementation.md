@@ -176,7 +176,7 @@ k8s-cluster-deployer/
   4. 检查唯一性：全部节点的 `machine-id`、`product_uuid`、`node_ip`、`node_name` 互不相同（克隆机最容易重复，重复会导致 join 异常）。
   5. 检查网卡与路由（手册 2.1）：`node_iface`、`ext_iface` 存在；`node_ip` 在 `node_iface` 上；默认路由只有一条且在 `ext_iface` 上；Harbor 域名能解析，且访问 Harbor 的路由走 `node_iface`。
   6. 检查系统包能装：`apt-get update` 成功，`haproxy`、`keepalived`、`socat`、`chrony`、`nftables`、`gnupg` 在内网 apt 站都有候选版本。
-  7. 网段冲突检查（手册 1.4）：用一个只依赖 Python 标准库 `ipaddress` 的脚本，检查 Pod、Service 网段与路由表、`node_cidr`、`extra_nets` 是否重叠。**只在尚未安装 Calico 的节点上执行**（有 `tunl0` 网卡就跳过，否则 Pod 路由会造成误报）。
+  7. 网段冲突检查（手册 1.4）：用一个只依赖 Python 标准库 `ipaddress` 的脚本，检查 Pod、Service 网段与路由表、`node_cidr`、`extra_nets` 是否重叠。**只在尚未安装 Calico 的节点上执行**（判据为 `/etc/cni/net.d` 不存在；早期用 `tunl0` 判断已被 #42 纠正——`ipip` 模块在阶段 10 就加载，`tunl0` 随之出现，会把之后的重跑全部误豁免）。
 - **验证**：所有检查通过，且重复执行不产生任何变更。
 - **注意**：任何一项失败都应直接中止并指出是哪台节点、哪个变量，不要尝试自动修复。
 
@@ -232,6 +232,7 @@ k8s-cluster-deployer/
   5. **启动依赖**：让 keepalived 在 HAProxy 之后启动（systemd 的 drop-in）。
   6. **启动顺序**：三台 master 同时启动并启用 HAProxy；然后 keepalived **按 master01、02、03 的顺序逐台启动**，master01 启动后要等到两个 VIP 都出现在它身上，再启动下一台。
   7. 对 `haproxy`、`keepalived` 执行 hold。
+- **使用注意**（决策 #42）：在已运行的集群上重跑本阶段、且 HAProxy/keepalived 配置真有变更时，第一段 play 不做串行——三台的 handler 并行触发，HAProxy/keepalived 同时重启，API 入口会有一次短暂中断/VIP 漂移（配置未变则 handler 不触发，无影响）。生产集群改 HA 配置请安排窗口，或逐台 `--limit` 执行。
 - **验证**：
   - master01 持有内外两个 VIP；
   - 每台 master 上 `vip:vip_port`、`ext_vip:vip_port` 都能连通；

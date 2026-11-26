@@ -28,7 +28,8 @@
         update_cache: false
       register: kernel_install
 
-    # 手册 2.5①：缺任何一个都不能重启
+    # 手册 2.5①：缺任何一个都不能重启。failed_when 读当前迭代结果，
+    # 循环内 results 聚合尚不存在（决策 #42 修复）
     - name: Verify vmlinuz and initrd.img exist under /boot
       ansible.builtin.stat:
         path: "{{ item }}"
@@ -36,9 +37,9 @@
         - "/boot/vmlinuz-{{ kernel_version }}"
         - "/boot/initrd.img-{{ kernel_version }}"
       register: kernel_boot_files
-      failed_when: not kernel_boot_files.results[idx].stat.exists
+      failed_when: not kernel_boot_files.stat.exists
       loop_control:
-        index_var: idx
+        label: "{{ item }}"
 
     - name: Read the running kernel
       ansible.builtin.command:

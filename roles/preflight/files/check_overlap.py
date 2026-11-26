@@ -3,7 +3,7 @@
 
 只依赖标准库 ipaddress。输入经环境变量 K8S_VARS 传 JSON：
 pod_cidr / service_cidr / node_cidr / extra_nets，路由表从 `ip -4 route show` 现场读取。
-必须在尚未安装 Calico 的节点上执行（有 tunl0 时任务层会跳过，避免 Pod 路由误报）。
+必须在尚未安装 Calico 的节点上执行（任务层以 /etc/cni/net.d 存在与否判断，避免 Pod 路由误报）。
 """
 import ipaddress
 import json

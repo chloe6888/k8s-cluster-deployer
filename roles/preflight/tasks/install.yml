@@ -49,6 +49,8 @@
         node_name_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_name') | list }}"
       run_once: true
 
+    # 循环的 failed_when 在每次迭代求值，拿到的是当次结果（无 .results 聚合，
+    # 引用 results[idx] 会直接报错——决策 #42 修复），直接读当前迭代即可
     - name: Check required interfaces (node_iface / ext_iface)
       ansible.builtin.stat:
         path: /sys/class/net/{{ item }}
@@ -56,9 +58,9 @@
         - "{{ node_iface }}"
         - "{{ ext_iface }}"
       register: preflight_ifaces
-      failed_when: not preflight_ifaces.results[idx].stat.exists
+      failed_when: not preflight_ifaces.stat.exists
       loop_control:
-        index_var: idx
+        label: "{{ item }}"
 
     - name: Check node_ip is bound to the internal interface
       ansible.builtin.command:
@@ -110,9 +112,18 @@
       changed_when: false
       check_mode: false
 
+    # 已装 Calico 的判据（决策 #42 修复）：查 kubelet/CNI 配置目录，不用 tunl0——
+    # os_baseline 阶段 10 就会 modprobe ipip（Calico IPIP 依赖），tunl0 随之创建，
+    # 之后重跑 preflight 时 VIP/CIDR 探测会被静默跳过；配置目录只有装过 k8s 才有
+    - name: Detect an existing CNI configuration
+      ansible.builtin.stat:
+        path: /etc/cni/net.d
+      register: preflight_cni_dir
+      changed_when: false
+      check_mode: false
+
     # VIP 已被占用时 keepalived 起来会脑裂/抢主，动手前从每个节点探一次；
-    # 已装 Calico 的节点有 tunl0 等接口与 Pod 路由，探测结果不可靠，跳过
-    # （与 CIDR 冲突检查同一豁免）
+    # 已装 Calico 的节点有 Pod 路由、且 VIP 本就在某台 master 上，探测必误报，跳过
     - name: Ping both VIPs to detect squatters
       ansible.builtin.command:
         cmd: ping -c 1 -W 2 {{ item }}
@@ -123,7 +134,7 @@
       failed_when: false
       changed_when: false
       check_mode: false
-      when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
+      when: not preflight_cni_dir.stat.exists
 
     - name: Assert neither VIP answers
       ansible.builtin.assert:
@@ -135,9 +146,9 @@
       loop: "{{ preflight_vip_ping.results | default([]) | selectattr('rc', 'defined') | list }}"
       loop_control:
         label: "{{ item.item }}"
-      when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
+      when: not preflight_cni_dir.stat.exists
 
-    # 手册 1.4：已装 Calico 的节点跳过，避免 Pod 路由误报
+    # 手册 1.4：已装 Calico 的节点跳过，避免 Pod 路由误报（同一豁免）
     - name: Check CIDR conflicts
       ansible.builtin.script: check_overlap.py
       args:
@@ -146,7 +157,7 @@
         K8S_VARS: >-
           {{ { 'pod_cidr': pod_cidr, 'service_cidr': service_cidr,
                'node_cidr': node_cidr, 'extra_nets': extra_nets | default([]) } | to_json }}
-      when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
+      when: not preflight_cni_dir.stat.exists
       changed_when: false
       check_mode: false
 
@@ -163,8 +174,8 @@
       loop: [haproxy, keepalived, socat, chrony, nftables, gnupg]
       register: preflight_apt
       changed_when: false
-      failed_when: preflight_apt.results[idx].stdout is search('Candidate:[ ]+\\(none\\)')
+      # 同上：读当前迭代（决策 #42 修复）
+      failed_when: preflight_apt.stdout is search('Candidate:[ ]+\\(none\\)')
       loop_control:
-        index_var: idx
         label: "{{ item }}"
       check_mode: false
