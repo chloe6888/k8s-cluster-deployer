@@ -148,6 +148,52 @@ for label, seq in (("node_name", names), ("node_ip", ips)):
     if dup:
         bad(f"{label} 重复: {', '.join(dup)}（克隆机最常见，会导致 join 异常）")
 
+# --- 地址冲突：VIP / MetalLB 地址池 不得与节点地址重叠 ---
+# worker 的 node_ext_ip 允许缺省（masters 段已强制），只对已填的检查
+node_ext = []
+for n in nodes:
+    raw = n.get("node_ext_ip")
+    if raw in (None, ""):
+        continue
+    eip = ip(raw, f"{n.get('name')} node_ext_ip")
+    if eip is not None:
+        node_ext.append((n.get("name"), eip))
+ext_seq = [str(e) for _, e in node_ext]
+dup = sorted({x for x in ext_seq if ext_seq.count(x) > 1})
+if dup:
+    bad(f"node_ext_ip 重复: {', '.join(dup)}")
+
+for label, v in (("vip", vip), ("ext_vip", ext_vip)):
+    if v is None:
+        continue
+    if str(v) in ips:
+        bad(f"{label} {v} 与某节点 node_ip 相同（keepalived 与节点地址冲突）")
+    if str(v) in ext_seq:
+        bad(f"{label} {v} 与某节点 node_ext_ip 相同（keepalived 与节点地址冲突）")
+
+
+def parse_range(rng):
+    """metallb_ext_range（a-b 或 CIDR）→ (lo, hi)；格式错返回 None（原格式检查已报）"""
+    try:
+        if "-" in str(rng):
+            lo, hi = [ipaddress.ip_address(x.strip()) for x in str(rng).split("-", 1)]
+        else:
+            n = ipaddress.ip_network(str(rng))
+            lo, hi = n.network_address, n.broadcast_address
+        return lo, hi
+    except ValueError:
+        return None
+
+
+pr = parse_range(rng) if rng else None
+if pr and int(pr[0]) <= int(pr[1]):
+    lo, hi = pr
+    if ext_vip is not None and lo <= ext_vip <= hi:
+        bad(f"外网 ext_vip {ext_vip} 落在 metallb_ext_range {rng} 内（keepalived 与 MetalLB 抢同一地址）")
+    for name, eip in node_ext:
+        if lo <= eip <= hi:
+            bad(f"metallb_ext_range {rng} 覆盖 {name} 的外网地址 {eip}（MetalLB 会宣告节点地址）")
+
 if fails:
     print("变量预检未通过：")
     for f in fails:

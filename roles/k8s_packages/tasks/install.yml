@@ -98,8 +98,8 @@
         name: kubelet
         enabled: true
 
-    # 双网卡固定节点 IP，init/join 之前必须完成
-    - name: Pin the node IP on both NICs
+    # 双网卡场景固定 kubelet 节点 IP（唯一来源，决策 #11），init/join 之前必须完成
+    - name: Pin the kubelet node IP via /etc/default/kubelet
       ansible.builtin.copy:
         dest: /etc/default/kubelet
         mode: "0644"

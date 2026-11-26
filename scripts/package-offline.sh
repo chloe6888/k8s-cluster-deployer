@@ -29,4 +29,10 @@ if [ -f $A/keys/kubernetes/Release.key ]; then
 else
   echo "警告：artifacts/keys/kubernetes/Release.key 不存在，部署文档 5.1 需要它，请先补上" >&2
 fi
+
+# 决策 #25：文件站清单条目为展平文件名（artifact role 按 $2==<展平名> 提取），
+# SHA256SUMS 本身不进清单；重跑时旧清单会被 find 排除后重新生成
+( cd "$OUT" && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+    | LC_ALL=C sort | xargs -r sha256sum ) > "$OUT/SHA256SUMS"
+echo "已生成 $OUT/SHA256SUMS（$(wc -l < "$OUT/SHA256SUMS") 个条目）"
 echo "已生成 $OUT（$(ls "$OUT" | wc -l) 个文件）"

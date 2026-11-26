@@ -1,5 +1,6 @@
 ---
-# 阶段 00②：节点侧预检（全部只读，不修改节点）。任何一项失败直接中止并指出节点与变量。
+# 阶段 00②：节点侧预检（只读为主；apt 缓存刷新是修订 15 的唯一例外，无破坏性）。
+# 任何一项失败直接中止并指出节点与变量。
 - name: Preflight the cluster nodes
   tags: [os]
   block:
@@ -108,6 +109,33 @@
                'node_ext_ip': node_ext_ip } | to_json }}
       changed_when: false
       check_mode: false
+
+    # VIP 已被占用时 keepalived 起来会脑裂/抢主，动手前从每个节点探一次；
+    # 已装 Calico 的节点有 tunl0 等接口与 Pod 路由，探测结果不可靠，跳过
+    # （与 CIDR 冲突检查同一豁免）
+    - name: Ping both VIPs to detect squatters
+      ansible.builtin.command:
+        cmd: ping -c 1 -W 2 {{ item }}
+      loop:
+        - "{{ vip }}"
+        - "{{ ext_vip }}"
+      register: preflight_vip_ping
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
+
+    - name: Assert neither VIP answers
+      ansible.builtin.assert:
+        that: item.rc != 0
+        fail_msg: >-
+          {{ inventory_hostname }} 上 ping {{ item.item }} 有响应：该 VIP 已被其他主机占用，
+          keepalived 启用后会脑裂/抢主。排查：arping -I {{ node_iface }} {{ item.item }}
+        quiet: true
+      loop: "{{ preflight_vip_ping.results | default([]) | selectattr('rc', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not (ansible_interfaces | default([]) | intersect(['tunl0']))
 
     # 手册 1.4：已装 Calico 的节点跳过，避免 Pod 路由误报
     - name: Check CIDR conflicts

@@ -11,6 +11,15 @@
       failed_when: runtime_containerd_active.stdout | trim != 'active'
       check_mode: false
 
+    # 2.x 版本号无 v 前缀、后面可能跟 commit，锚点与 install 阶段一致（见该处注释）
+    - name: Verify the containerd version is {{ containerd_version }}
+      ansible.builtin.command:
+        cmd: containerd --version
+      register: runtime_containerd_ver
+      changed_when: false
+      failed_when: runtime_containerd_ver.stdout is not search(' ' ~ containerd_version ~ '(\s|$)')
+      check_mode: false
+
     - name: Verify the runc version is {{ runc_version }}
       ansible.builtin.command:
         cmd: runc --version

@@ -83,30 +83,36 @@
           loop_control:
             label: "{{ item }}"
 
+        # 决策 #25：仓库清单条目是 artifacts/ 内相对路径（无前缀）。清单一次全量校验，
+        # --ignore-missing 会把缺失文件静默当通过，所以必须再断言每个映射文件的
+        # "<相对路径>: OK" 确实在输出里；templates/ 下的映射（如 containerd.service）
+        # 不在清单内，跳过
         - name: Verify against the repository SHA256SUMS
           ansible.builtin.command:
-            cmd: sha256sum -c --ignore-missing {{ artifact_repo_map[item] }}
+            cmd: sha256sum -c --ignore-missing checksums/SHA256SUMS
           args:
             chdir: "{{ playbook_dir }}/../artifacts"
-          loop: "{{ artifact_list }}"
-          loop_control:
-            label: "{{ item }}"
-          when: artifact_repo_map[item] is match('^artifacts/')
           delegate_to: localhost
           run_once: true
           register: artifact_repo_verify
           changed_when: false
+          failed_when: false
           check_mode: false
 
-        - name: Assert repository verification passed
+        - name: Assert every mapped file passed verification
           ansible.builtin.assert:
-            that: item.rc is defined and item.rc == 0
-            fail_msg: "{{ artifact_list[idx] }} 在控制机校验失败（artifacts/checksums/SHA256SUMS）"
+            that:
+              - artifact_repo_verify.rc == 0
+              - (artifact_repo_map[item] | regex_replace('^artifacts/', '')) ~ ': OK' in artifact_repo_verify.stdout_lines
+            fail_msg: >-
+              {{ item }}（{{ artifact_repo_map[item] }}）未通过校验：
+              artifacts/checksums/SHA256SUMS 的 OK 行里没有它。
+              sha256sum -c 输出：{{ artifact_repo_verify.stdout_lines | default([]) | join('；') }}
             quiet: true
-          loop: "{{ artifact_repo_verify.results | selectattr('rc', 'defined') | list }}"
+          loop: "{{ artifact_list }}"
           loop_control:
-            label: "{{ artifact_list[idx] }}"
-            index_var: idx
+            label: "{{ item }}"
+          when: artifact_repo_map[item] is match('^artifacts/')
           run_once: true
 
         - name: Push files to the node

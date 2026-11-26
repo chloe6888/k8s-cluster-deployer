@@ -72,11 +72,13 @@
   block:
     - name: Stop the holder, verify the takeover, restore
       block:
+        # 双 VIP 是两个独立 VRRP 实例、优先级一致，正常同节点持有；
+        # 本机持有任一 VIP 即算持有者（worker 上两者皆无，整段跳过）
         - name: Find the current VIP holder
           ansible.builtin.shell:
             cmd: |
               set -o pipefail
-              ip -4 addr show | grep -w '{{ vip }}' >/dev/null && echo holder || echo ''
+              ip -4 addr show | grep -qwE '{{ vip }}|{{ ext_vip }}' && echo holder || echo ''
           register: vf_vip_holder
           changed_when: false
           check_mode: false
@@ -87,29 +89,33 @@
             name: haproxy
             state: stopped
 
-        # 约 1 分钟：20 次 × 3 秒。weight -30 降权后 keepalived 让出 VIP
-        - name: Wait for this node to release the VIP
+        # 约 1 分钟：20 次 × 3 秒。weight -30 降权后 keepalived 让出两个 VIP
+        - name: Wait for this node to release both VIPs
           ansible.builtin.shell:
             cmd: |
               set -o pipefail
-              ip -4 addr show | grep -w '{{ vip }}' || true
+              ip -4 addr show | grep -wE '{{ vip }}|{{ ext_vip }}' || true
           when: (vf_vip_holder.stdout | trim) == 'holder'
           register: vf_vip_after
-          until: vf_vip_after.stdout | trim | length == 0
+          until: (vf_vip_after.stdout | trim | length) == 0
           retries: 20
           delay: 3
           changed_when: false
           check_mode: false
 
-        # 约 1 分钟：20 次 × 3 秒。接管后 apiserver 端口经 VIP 可达
-        - name: Verify another master took over the VIP
+        # 约 1 分钟：20 次 × 3 秒。内网 VIP：接管后 apiserver 端口经 VIP 可达；
+        # 外网 VIP：haproxy frontend 有源地址 ACL，TCP 探测会被拒而误判，
+        # 改用 ICMP——keepalived 持有 VIP 即应答 ARP/ping
+        - name: Verify another master took over both VIPs
           ansible.builtin.shell:
             cmd: |
-              timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' && echo takeover-ok
+              set -o pipefail
+              timeout 5 bash -c 'echo > /dev/tcp/{{ vip }}/{{ vip_port }}' \
+                && ping -c 1 -W 3 {{ ext_vip }} >/dev/null && echo takeover-ok
           delegate_to: "{{ groups['masters'][0] }}"
           run_once: true
           register: vf_failover_check
-          until: vf_failover_check.stdout | trim == 'takeover-ok'
+          until: (vf_failover_check.stdout | trim) == 'takeover-ok'
           retries: 20
           delay: 3
           changed_when: false

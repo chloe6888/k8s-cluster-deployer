@@ -53,7 +53,15 @@
       no_log: true
       notify: Restart keepalived
 
-    # 手册 3.5：keepalived 必须排在 haproxy 之后（健康检查依赖其端口）
+    # 手册 3.5：keepalived 必须排在 haproxy 之后（健康检查依赖其端口）。
+    # Ubuntu 24.04 的 keepalived deb 只带 /usr/lib 单元，/etc 下的 drop-in 目录
+    # 不会自带，copy 不建父目录，必须先建
+    - name: Create the keepalived systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/keepalived.service.d
+        state: directory
+        mode: "0755"
+
     - name: Order keepalived after HAProxy via a systemd drop-in
       ansible.builtin.copy:
         dest: /etc/systemd/system/keepalived.service.d/10-after-haproxy.conf
@@ -77,6 +85,17 @@
         name: haproxy
         state: started
         enabled: true
+
+    # Restart keepalived 只应在已运行时执行（有序启动由 ha_keepalived 段控制）。
+    # 不能在 handler 里判 ansible_facts.services——默认 setup 不采集服务表，恒为空，
+    # 条件永远为假；改为 flush 前显式探测运行态
+    - name: Probe whether keepalived is currently active
+      ansible.builtin.command:
+        cmd: systemctl is-active --quiet keepalived
+      register: ha_keepalived_probe
+      failed_when: false
+      changed_when: false
+      check_mode: false
 
     # 让上面的配置变更（重启 haproxy / 重载 systemd）先生效
     - name: Flush handlers

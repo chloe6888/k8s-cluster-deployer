@@ -23,14 +23,17 @@
       changed_when: false
       check_mode: false
 
-    # 已是目标版本就不动，避免重复解压产生双版本
+    # 已是目标版本就不动，避免重复解压产生双版本；不能加 creates: /usr/local/bin/containerd，
+    # 否则版本升级被旧文件挡住。2.x 输出形如
+    # "containerd github.com/containerd/containerd/v2 2.3.0 <commit>"——版本号无 v 前缀、
+    # 前面是空格、后面还可能有 commit，锚点必须是 " <版本>(空白或行尾)"
     - name: Extract to /usr/local (bin/* only, avoiding dual versions)
-      when: runtime_containerd_ver.stdout is not search('v' ~ containerd_version ~ '$')
+      when: runtime_containerd_ver.stdout is not search(' ' ~ containerd_version ~ '(\s|$)')
       ansible.builtin.unarchive:
         src: "{{ package_dir }}/containerd-{{ containerd_version }}-linux-amd64.tar.gz"
         dest: /usr/local
         remote_src: true
-        creates: /usr/local/bin/containerd
+      notify: Restart containerd
 
     # 内容同 containerd v2.3.0 官方单元
     - name: Install the systemd unit
@@ -70,7 +73,7 @@
         path: /etc/containerd/config.toml
         regexp: '[a-zA-Z0-9._:/-]+/pause:[0-9.]+'
         replace: "{{ registry }}/google_containers/pause:{{ pause_version }}"
-      register: runtime_cfg_pause
+      notify: Restart containerd
 
     # 手册 4.2 ②
     - name: Enable the systemd cgroup driver
@@ -78,26 +81,28 @@
         path: /etc/containerd/config.toml
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
-      register: runtime_cfg_cgroup
+      notify: Restart containerd
 
-    # 手册 4.2 ③；修订 4
+    # 手册 4.2 ③；修订 4。default 输出是单引号 config_path = ''，且 transfer 段也有
+    # config_path 键——必须锚定 registry 段头；两种引号风格都兼容（2.x 实测单引号）
     - name: Point registry config_path at certs.d
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
-        regexp: 'config_path = ""'
-        replace: 'config_path = "/etc/containerd/certs.d"'
-      register: runtime_cfg_path
+        regexp: >-
+          (\[plugins\.'io\.containerd\.cri\.v1\.images'\.registry\]\n\s*config_path = )['\"][^'\"]*['\"]
+        replace: "\\1'/etc/containerd/certs.d'"
+      notify: Restart containerd
 
-    # 手册 4.2：任何一项不符就停——实测后固化为模板
+    # 手册 4.2：任何一项不符就停。dump 输出单引号（2.x 实测），SystemdCgroup 是裸布尔
     - name: Verify the config via containerd config dump
       ansible.builtin.command:
         cmd: containerd config dump
       register: runtime_cfg_dump
       changed_when: false
       failed_when: >-
-        runtime_cfg_dump.stdout is not search((registry ~ '/pause:' ~ pause_version) | regex_escape)
+        runtime_cfg_dump.stdout is not search((registry ~ '/google_containers/pause:' ~ pause_version) | regex_escape)
         or runtime_cfg_dump.stdout is not search('SystemdCgroup = true')
-        or runtime_cfg_dump.stdout is not search('config_path = "/etc/containerd/certs.d"')
+        or runtime_cfg_dump.stdout is not search("config_path = '/etc/containerd/certs.d'")
       check_mode: false
 
     # 手册 4.2：配置或运行时变更须重启 containerd 才继续（后续 hosts.toml 依赖运行态）

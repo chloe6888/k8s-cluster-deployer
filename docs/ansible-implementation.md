@@ -248,13 +248,13 @@ k8s-cluster-deployer/
 - **主机**：全部节点，并行。
 - **步骤**：
   1. **containerd 2.3.0**：获取并校验压缩包；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；systemd 单元用仓库里已有的 `templates/systemd/containerd.service.j2`，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
-  2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/pause:3.10.2`；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。
+  2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/google_containers/pause:3.10.2`（与 kubeadm 的 `imageRepository` 同路径，决策 #4）；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4；2.x 的 default 输出是单引号，且 transfer 段也有 `config_path` 键，替换必须锚定 registry 段头，不能按 `"config_path = \"\"` 字面匹配）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。三处替换与解压安装都挂 `Restart containerd` 通知，flush 点在 Harbor 访问配置之前（后续 hosts.toml 依赖运行态）。
   3. **Harbor 访问**（修订点 4）：对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。生产环境不使用 `skip_verify`。
   4. **runc 1.4.2**：获取并校验 `runc.amd64` 与 `runc.sha256sum`；卸载 apt 版 runc；安装到 `/usr/local/sbin/runc`；变更后重启 containerd。
   5. **nerdctl 2.3.0**：获取并校验压缩包，解压到 `/usr/local/bin`。
   6. 启动 containerd 并设为开机启动。
   7. **镜像预检**（只在 master01 上执行一次）：用 `nerdctl --namespace k8s.io` 逐个拉取下列镜像，**任何一个失败都中止**并列出缺失的镜像：
-     - `pause:3.10.2`、`tigera/operator:v1.42.6`；
+     - `google_containers/pause:3.10.2`、`tigera/operator:v1.42.6`；
      - `calico/` 下的 `node`、`cni`、`typha`、`kube-controllers`、`apiserver`、`pod2daemon-flexvol`、`key-cert-provisioner`，版本均为 `v3.32.2`；
      - `metallb/controller:v0.15.3`、`metallb/speaker:v0.15.3`、`frrouting/frr:10.4.1`；
      - `envoyproxy/gateway:v1.7.1`、`envoyproxy/envoy:distroless-v1.37.1`；
@@ -299,7 +299,7 @@ k8s-cluster-deployer/
 - **步骤**（对每一台）：
   1. 确认该节点的 `/etc/default/kubelet` 里是本机 `node_ip`，且能连通 `vip:vip_port`。
   2. 在 master01 上**现生成**凭据（`certificate-key` 只有 2 小时有效，所以每台 join 前都重新生成）：`kubeadm token create --ttl 1h` 取得 token，计算 CA 公钥 hash，`kubeadm init phase upload-certs --upload-certs` 取得 `certificate-key`。这些任务都 `no_log`。
-  3. 渲染本节点专用的 JoinConfiguration（权限 0600，含 token 与 certificate-key；`apiserverAdvertiseAddress=<本机 node_ip>`，必须带，否则双网卡下 etcd peer 可能用错地址；`taints: []`），再执行 `kubeadm join --config`；已存在 `kubelet.conf` 则跳过。join 命令的命令行不含凭据，输出也不屏蔽，失败时直接可见；配置文件在 `always` 中删除，成功或失败都不遗留。
+  3. 渲染本节点专用的 JoinConfiguration（权限 0600，含 token 与 certificate-key；`controlPlane.localAPIEndpoint.advertiseAddress=<本机 node_ip>`、`bindPort: 6443`——v1beta4 的 JoinControlPlane 只有 `localAPIEndpoint` 与 `certificateKey` 两个字段，`apiserverAdvertiseAddress` 是命令行 flag，写进配置会被严格解码拒绝——必须带，否则双网卡下 etcd peer 可能用错地址；`taints: []`）；渲染后先过 `kubeadm config validate`（输出不含凭据，不屏蔽），再执行 `kubeadm join --config`；已存在 `kubelet.conf` 则跳过。join 命令的命令行不含凭据，输出也不屏蔽，失败时直接可见；配置文件在 `always` 中删除，成功或失败都不遗留。
   4. 把 `admin.conf` 复制到该节点的 `~/.kube/config`。
   5. **闸门**（修订点 12）：反复检查（最多约 5 分钟），直到新节点的 etcd、kube-apiserver、kube-controller-manager、kube-scheduler 四个静态 Pod 都在运行，并且 etcd 成员数等于已加入的 master 数、`endpoint health --cluster` 全部 healthy。
   6. `kubeadm certs check-expiration` 同样应为约 20 年。

@@ -35,7 +35,7 @@
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          helm template eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz \
+          helm template eg {{ package_dir }}/gateway-helm-v{{ envoy_gateway_version }}.tgz \
             -n envoy-gateway-system -f {{ package_dir }}/charts/envoy-gateway-values.yaml | grep -E 'image:' | sort -u
       register: gw_images
       changed_when: false
@@ -74,9 +74,9 @@
         or (gw_release_values.stdout | from_json) != gw_expected_values
       ansible.builtin.command:
         cmd: >-
-          helm upgrade --install eg {{ package_dir }}/charts/gateway-helm-v{{ envoy_gateway_version }}.tgz
+          helm upgrade --install eg {{ package_dir }}/gateway-helm-v{{ envoy_gateway_version }}.tgz
           --namespace envoy-gateway-system --create-namespace
-          -f {{ package_dir }}/charts/envoy-gateway-values.yaml
+          -f {{ package_dir }}/charts/envoy-gateway-values.yaml --history-max 5
       changed_when: true
 
     # 手册 8.2：流程门禁，缺失则 8.3 apply 直接失败
@@ -105,31 +105,35 @@
       register: gw_gc_apply
       changed_when: "'created' in gw_gc_apply.stdout or 'configured' in gw_gc_apply.stdout"
 
-    # 手册 8.3：Accepted 之后 8.4 的 Gateway 才会被受理
+    # 手册 8.3：Accepted 之后 8.4 的 Gateway 才会被受理；operator 刚起来时 CRD 对象
+    # 尚未受理，轮询等待（约 150 秒：30 次 × 5 秒）
     - name: Wait for the eg GatewayClass to be Accepted
       ansible.builtin.command:
         cmd: kubectl get gatewayclass eg
       register: gw_gc
+      until: gw_gc.stdout is search('True')
+      retries: 30
+      delay: 5
       changed_when: false
-      failed_when: gw_gc.stdout is not search('True')
       check_mode: false
 
     # ---- 8.4① TLS Secret（vault 证书 → /dev/shm，用后必删）----
     - name: TLS Secret
       when: gw_tls_enabled | bool
       block:
-        # 手册 8.4①：tmpfs，掉电即失；内容即密钥，整任务 no_log
+        # 手册 8.4①：tmpfs，掉电即失；内容即密钥，整任务 no_log。
+        # gw_tls_cert / gw_tls_key 是控制机上的文件路径，必须用 src 拷贝内容
         - name: Stage the cert and key in /dev/shm
           ansible.builtin.copy:
+            src: "{{ item.src }}"
             dest: "{{ item.dest }}"
-            content: "{{ item.content }}"
             mode: "0600"
           no_log: true
           loop:
-            - dest: /dev/shm/gw-tls.crt
-              content: "{{ gw_tls_cert }}"
-            - dest: /dev/shm/gw-tls.key
-              content: "{{ gw_tls_key }}"
+            - src: "{{ gw_tls_cert }}"
+              dest: /dev/shm/gw-tls.crt
+            - src: "{{ gw_tls_key }}"
+              dest: /dev/shm/gw-tls.key
 
         # 手册 8.4①：证书与私钥配对不上，后面的 Secret 会把问题带到网关层
         - name: Verify the cert and key match and show cert info

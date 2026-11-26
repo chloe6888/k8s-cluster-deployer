@@ -1,6 +1,7 @@
 ---
 # k8s-master01 初始化。kubeconfig 只用 /etc/kubernetes/admin.conf，不依赖 ~/.kube。
-# helm 的安装不在本文件：它与集群初始化无关，放在工具阶段（Calico 阶段之前、仅 first_master）。
+# helm 的安装不在本文件：它与集群初始化无关，阶段 40 k8s_packages 装到全部 master
+# （2026-11-26 起，决策 #14），Calico 等阶段直接可用。
 - name: Initialize k8s-master01
   tags: [kubeadm]
   environment:

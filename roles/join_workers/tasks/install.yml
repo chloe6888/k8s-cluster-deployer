@@ -81,11 +81,12 @@
       changed_when: false
       check_mode: false
 
-    # 手册第 6 章：operator 模式下 calico-node 在 calico-system 命名空间
-    - name: Wait for calico-node Running on this node
+    # 手册第 6 章：operator 模式下 calico-node 在 calico-system 命名空间。
+    # kubectl wait 的 --for 只认 create/delete/condition=/jsonpath=，没有 container=
+    - name: Wait for calico-node Ready on this node
       ansible.builtin.command:
         cmd: >-
-          kubectl -n calico-system wait --for=container=calico-node
+          kubectl -n calico-system wait --for=condition=Ready
           --field-selector spec.nodeName={{ node_name }} pod -l k8s-app=calico-node --timeout=10m
       delegate_to: "{{ groups['masters'][0] }}"
       register: jw_calico
@@ -93,7 +94,7 @@
       failed_when: false
       check_mode: false
 
-    # 失败时先打出 Pod 明细再失败，便于现场排查
+    # 失败时打出 Pod 明细并直接失败（输出随本任务的失败结果一并展示），便于现场排查
     - name: Show pod details when calico-node is not ready
       when: jw_calico.rc != 0
       ansible.builtin.shell:
@@ -101,12 +102,6 @@
           set -o pipefail
           kubectl -n calico-system get pods -o wide | grep -E '{{ node_name }}|NAME'
       delegate_to: "{{ groups['masters'][0] }}"
-      register: jw_calico_debug
       changed_when: false
       failed_when: true
       check_mode: false
-
-    - name: Print the pod details
-      when: jw_calico.rc != 0
-      ansible.builtin.debug:
-        var: jw_calico_debug.stdout_lines

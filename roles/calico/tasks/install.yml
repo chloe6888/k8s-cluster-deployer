@@ -38,7 +38,7 @@
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          helm template calico-crds {{ package_dir }}/charts/crd.projectcalico.org.v1-v{{ calico_version }}.tgz \
+          helm template calico-crds {{ package_dir }}/crd.projectcalico.org.v1-v{{ calico_version }}.tgz \
             --include-crds > {{ package_dir }}/charts/calico-crds.yaml
           grep -q CustomResourceDefinition {{ package_dir }}/charts/calico-crds.yaml
       changed_when: false
@@ -82,7 +82,7 @@
         or calico_values.changed
       ansible.builtin.command:
         cmd: >-
-          helm upgrade --install calico {{ package_dir }}/charts/tigera-operator-v{{ calico_version }}.tgz
+          helm upgrade --install calico {{ package_dir }}/tigera-operator-v{{ calico_version }}.tgz
           -n tigera-operator --create-namespace
           -f {{ package_dir }}/charts/calico-values.yaml
           --history-max 5

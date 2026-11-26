@@ -129,10 +129,13 @@
       when: os_swapon.stdout | trim != ''
       changed_when: os_swapon.stdout | trim != ''
 
-    - name: Comment out /swap.img in /etc/fstab
+    # 手册 2.4：注释掉所有 swap 条目（不只是 /swap.img——UUID 或其他路径的 swap
+    # 同样会导致重启后 swap 复活）。swap 是第 3 个字段，按字段结构匹配，
+    # 不会误伤行尾注释里带 swap 字样的数据盘条目；已注释行跳过（幂等）
+    - name: Comment out every swap entry in /etc/fstab
       ansible.builtin.replace:
         path: /etc/fstab
-        regexp: '(?<!#)^\s*(/swap\.img\s)'
+        regexp: '^(?!\s*#)(\s*\S+\s+\S+\s+swap\s.*)$'
         replace: '#\1'
 
     # 手册 2.6

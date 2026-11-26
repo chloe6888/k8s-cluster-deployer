@@ -1,5 +1,5 @@
 #!/bin/bash
-# {{ ansible_managed }} —— 手册 3.3；端口已展开为数字（修订点 9：模板渲染，shell 变量原样保留）
+# {{ ansible_managed }} 端口已展开为数字
 # 只返回 0/1：失败时 keepalived 按 weight 降低本机优先级，恢复后自动回升
 PORT="{{ vip_port }}"
 RETRY=3

@@ -8,9 +8,11 @@
     name: haproxy
     state: restarted
 
-# 仅已启动时重启：配置变更时未启动的节点不拉起（有序启动由 ha_keepalived 控制）
+# 仅已启动时重启：配置变更时未启动的节点不拉起（有序启动由 ha_keepalived 控制）。
+# 运行态由 install.yml flush 前的 systemctl is-active 探测注册；
+# 不能用 ansible_facts.services——默认 setup 不采集服务表，条件恒为假
 - name: Restart keepalived
   ansible.builtin.systemd:
     name: keepalived
     state: restarted
-  when: "'keepalived.service' in ansible_facts.services and ansible_facts.services['keepalived.service']['state'] == 'running'"
+  when: ha_keepalived_probe.rc | default(1) == 0

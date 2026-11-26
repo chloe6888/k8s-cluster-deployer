@@ -10,9 +10,13 @@ discovery:
       - sha256:{{ jm_ca_hash.stdout | trim }}
 nodeRegistration:
   name: {{ node_name }}
-  criSocket: unix:///run/containerd/containerd.sock  
+  criSocket: unix:///run/containerd/containerd.sock
   taints: []                               # master 不加污点
+# v1beta4 的 JoinControlPlane 只有 localAPIEndpoint + certificateKey；
+# apiserverAdvertiseAddress / apiserverBindPort 是命令行 flag，不是这里的字段
+# （严格解码，写错字段 kubeadm 直接拒绝）
 controlPlane:
-  apiserverAdvertiseAddress: {{ node_ip }}   # 只通告内网 IP
-  apiserverBindPort: 6443
+  localAPIEndpoint:
+    advertiseAddress: {{ node_ip }}   # 只通告内网 IP
+    bindPort: 6443
   certificateKey: {{ jm_upload.stdout_lines | last | trim }}

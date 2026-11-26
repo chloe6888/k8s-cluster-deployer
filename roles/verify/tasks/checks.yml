@@ -135,21 +135,40 @@
           loop: "{{ [vip, ext_vip] }}"
           run_once: true
 
+        # 手册 9.1：只核系统命名空间（-A 连业务 Pod 一起看，滚动中的瞬时状态会
+        # 误报失败）；查询失败也只记录不中止，汇总阶段统一判
         - name: Verify system pods are Running or Completed
           ansible.builtin.command:
-            cmd: kubectl get pods -A -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}'
+            cmd: >-
+              kubectl -n {{ item }} get pods -o
+              jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}'
           delegate_to: "{{ groups['masters'][0] }}"
           run_once: true
+          loop: [kube-system, calico-system, tigera-operator, metallb-system, envoy-gateway-system]
+          loop_control:
+            label: "{{ item }}"
           register: vf_pods
           changed_when: false
+          failed_when: false
           check_mode: false
 
-        - name: Record abnormal system pods
-          when: (vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length > 0
+        - name: Record namespace query failures
+          when: (vf_pods.results | selectattr('rc', 'ne', 0) | list | length) > 0
           ansible.builtin.set_fact:
             verify_failures: >-
-              {{ verify_failures + ['非 Running/Succeeded Pod '
-              ~ ((vf_pods.stdout_lines | reject('in', ['Running', 'Succeeded'])) | list | length) ~ ' 个'] }}
+              {{ verify_failures + ['系统命名空间查询失败: '
+              ~ (vf_pods.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', '))] }}
+          run_once: true
+
+        - name: Record abnormal system pods
+          when: >-
+            (vf_pods.results | selectattr('rc', 'eq', 0) | map(attribute='stdout_lines') | flatten
+             | reject('in', ['Running', 'Succeeded']) | list | length) > 0
+          ansible.builtin.set_fact:
+            verify_failures: >-
+              {{ verify_failures + ['系统 Pod 非 Running/Succeeded: '
+              ~ (vf_pods.results | selectattr('rc', 'eq', 0) | map(attribute='stdout_lines') | flatten
+                 | reject('in', ['Running', 'Succeeded']) | list | join(', '))] }}
           run_once: true
 
         # 手册 9.1：离线纯度——任何一个镜像不来自内网仓库都算破坏离线承诺
