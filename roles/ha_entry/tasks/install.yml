@@ -20,6 +20,10 @@
       loop: [haproxy, keepalived]
       when: ha_install is changed
 
+    # service_facts 不属于默认 gather_facts 内容；Handler 要用它判断 keepalived 是否正在运行。
+    - name: Gather service facts before updating HA configuration
+      ansible.builtin.service_facts:
+
     # 手册 3.2：haproxy -c 校验通过才落盘；配置含后端地址，no_log
     - name: Write the HAProxy configuration
       ansible.builtin.template:
@@ -52,6 +56,15 @@
         validate: keepalived -t -f %s
       no_log: true
       notify: Restart keepalived
+
+    # 首次安装时 systemd drop-in 目录不一定存在，copy 不会自动创建父目录。
+    - name: Create the Keepalived systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/keepalived.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
     # 手册 3.5：keepalived 必须排在 haproxy 之后（健康检查依赖其端口）
     - name: Order keepalived after HAProxy via a systemd drop-in
