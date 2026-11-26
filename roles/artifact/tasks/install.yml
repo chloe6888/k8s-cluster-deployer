@@ -18,57 +18,9 @@
         state: directory
         mode: "0755"
 
-    # 决策 #25：文件站清单条目为展平文件名
-    - name: Fetch from the file station
-      when: artifact_source == 'file_url'
-      block:
-        - name: Download SHA256SUMS
-          ansible.builtin.get_url:
-            url: "{{ file_url }}/SHA256SUMS"
-            dest: "{{ package_dir }}/SHA256SUMS"
-            mode: "0644"
-
-        - name: Extract the checksum of each file
-          ansible.builtin.command:
-            cmd: awk -v f={{ item }} '$2==f {print $1}' {{ package_dir }}/SHA256SUMS
-          loop: "{{ artifact_list }}"
-          loop_control:
-            label: "{{ item }}"
-          register: artifact_sums
-          changed_when: false
-          check_mode: false
-
-        # 手册 1.6：条目缺失说明文件站清单与手册不一致
-        - name: Assert checksums exist and are well-formed
-          ansible.builtin.assert:
-            that:
-              - item.stdout | length == 64
-              - item.stdout is match('^[0-9a-f]{64}$')
-            fail_msg: >-
-              SHA256SUMS 中找不到 {{ artifact_list[idx] }} 的条目（或格式错误）。
-              文件站 {{ file_url }} 的清单须覆盖手册 1.6 全部文件（展平文件名，决策 #25）。
-            quiet: true
-          loop: "{{ artifact_sums.results }}"
-          loop_control:
-            label: "{{ artifact_list[idx] }}"
-            index_var: idx
-
-        - name: Download files with checksum verification
-          ansible.builtin.get_url:
-            url: "{{ file_url }}/{{ artifact_list[idx] }}"
-            dest: "{{ package_dir }}/{{ artifact_list[idx] }}"
-            checksum: "sha256:{{ item.stdout }}"
-            mode: "0644"
-            timeout: 300
-          loop: "{{ artifact_sums.results }}"
-          loop_control:
-            label: "{{ artifact_list[idx] }}"
-            index_var: idx
-          register: artifact_downloaded
-
-    # 仓库模式：控制机先按 artifacts/checksums/SHA256SUMS 校验，再推送节点
+    # 决策 #39：统一从本仓库 artifacts/ 推送——控制机先按 checksums/SHA256SUMS 全量校验
+    # （源头 fail-fast，不依赖文件站那份拷贝），再经 SSH 推给节点；copy 幂等，重跑跳过未变文件
     - name: Push from the repository
-      when: artifact_source == 'repo'
       block:
         - name: Map flat names to repository paths
           ansible.builtin.set_fact:
@@ -77,7 +29,7 @@
         - name: Assert every file is in the mapping
           ansible.builtin.assert:
             that: item in artifact_repo_map
-            fail_msg: "文件 {{ item }} 不在 artifact_repo_map 映射表内，无法从仓库推送；请补映射或改用 artifact_source=file_url"
+            fail_msg: "文件 {{ item }} 不在 artifact_repo_map 映射表内（roles/artifact/defaults/main.yml），请补映射"
             quiet: true
           loop: "{{ artifact_list }}"
           loop_control:

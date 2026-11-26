@@ -6,9 +6,8 @@
 #       name: artifact
 #     vars:
 #       artifact_files: [a, b]
-# 两种来源：
-#   artifact_source=file_url（默认）：节点从内网文件站下载，get_url 按 SHA256SUMS 校验（展平文件名）
-#   artifact_source=repo              ：控制机按本仓库 artifacts/checksums/SHA256SUMS 校验后推送
-# 校验失败即中止（get_url 的 checksum 参数 / sha256sum -c 失败都非零退出）。
+# 来源唯一（决策 #39）：控制机按本仓库 artifacts/checksums/SHA256SUMS 全量校验后推送到节点
+# （文件站分发已取消；手册的手工部署流程仍走 ${FILE_URL}，与自动化无关）。
+# 校验失败即中止（sha256sum -c 非零退出 / OK 行断言不过）。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml

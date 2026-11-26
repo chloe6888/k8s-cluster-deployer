@@ -23,7 +23,7 @@ Kubernetes v1.36.6 离线高可用部署项目（Ubuntu 24.04、containerd 2.3.0
 
 - **集群 inventory（网段、VIP、VRID、网卡名、Harbor/mirror 实址）属内部信息，只存部署机本地，不入本仓库**；新集群 = 复制 `inventories/example/` 为 `inventories/<集群名>/` 并逐项替换
 - 多集群同二层时 VRID 必须互不重叠（确认各自独立二层可复用同一对）；Pod/Service CIDR 各集群错开，为将来跨集群组网/互联留余量
-- 每集群一份独立 `vault.yml`（独立 vault 口令）与 `files/harbor-ca.crt`；若多集群共用同一套 Harbor/文件站，实址填同一值即可
+- 每集群一份独立 `vault.yml`（独立 vault 口令）与 `files/harbor-ca.crt`；若多集群共用同一套 Harbor，实址填同一值即可
 - 上线顺序建议：**测试环境全流程演练 → 生产集群**（先验证 playbook 与镜像，再上生产）
 - `ansible.cfg` 无默认 inventory：**不带 `-i` 一律拒绝执行**，且 preflight-vars 会先打印"当前集群"横幅（集群名/节点数/VIP/VRID）供肉眼确认
 
@@ -52,5 +52,5 @@ ansible-playbook -i inventories/<集群> playbooks/reset.yml --tags reset -e con
 ```bash
 scripts/download-artifacts.sh      # 重新下载全部离线资源并校验（需访问 GitHub）
 scripts/verify-checksums.sh        # 校验现有资源
-scripts/package-offline.sh         # 展开成扁平目录（dist/offline-files），上传到内网镜像站 ${FILE_URL}
+scripts/package-offline.sh         # 展开成扁平目录（dist/offline-files），供手册手工部署流程上传文件站；Ansible 部署不走此步（决策 #39，直接从 artifacts/ 推送）
 ```

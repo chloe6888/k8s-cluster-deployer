@@ -36,8 +36,7 @@
       notify: Restart containerd
 
     # 内容同 containerd v2.3.0 官方单元。经 artifact 渠道安装（本文件顶部已获取）：
-    # file_url 模式含 SHA256SUMS 校验，介质单一来源——仓库 templates/systemd →
-    # 文件站/repo 推送 → package_dir → 本机，不再从控制机路径直拷
+    # 仓库 templates/systemd → 控制机校验后推送 package_dir → 本机，介质单一来源
     - name: Install the systemd unit
       ansible.builtin.copy:
         src: "{{ package_dir }}/containerd.service"

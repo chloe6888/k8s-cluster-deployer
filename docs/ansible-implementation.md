@@ -67,7 +67,7 @@ k8s-cluster-deployer/
 2. **`node_ip` 必须显式写入**（worker 内联在 `hosts.yml`，master 在 `host_vars/`），不用 `ansible_default_ipv4`（默认路由在外网网卡，会取到外网 IP）；预检断言 `node_ip` 落在 `node_cidr` 内。
 3. **vault 文件必须放在 `group_vars/all/` 目录里**才会被自动加载（放成 `group_vars/vault.yml` 不会生效，因为没有名叫 `vault` 的组）。
 4. **离线依赖**：控制机也要离线可用，collection 用 `ansible-galaxy collection download` 入库。kubectl 与 helm 步骤用 `command`（行为与手册完全一致，排障直观，被管节点也不需要 Python `kubernetes` 库），稳定后再考虑换成 `kubernetes.core`。
-5. **下载校验**：文件站模式用 `get_url` 的 `checksum` 参数指向 `SHA256SUMS`；仓库模式在控制机校验后推送；校验失败即停止。
+5. **下载校验**：控制机对 `artifacts/checksums/SHA256SUMS` 全量校验通过后再推送到节点（决策 #39，文件站分发已取消）；校验失败即停止。
 6. **敏感信息**：token、certificate-key、stats 密码、TLS 私钥所在的任务全部 `no_log: true`；TLS 临时文件只写 `/dev/shm`，用完删除。
 7. **幂等**：每个任务第二次执行必须 `changed=0`，这是验收标准之一。不可幂等的步骤（内核清理、`kubeadm init/join`）用开关变量或 `creates` 保护。
 8. **标签对应章节**：`os`、`ha`、`runtime`、`kubeadm`、`cni`、`lb`、`gateway`、`verify`，支持单章重跑。
@@ -97,12 +97,12 @@ k8s-cluster-deployer/
 
 | 介质 | 要求 | 获取方式 |
 | --- | --- | --- |
-| 二进制、Chart、公钥 | 手册 1.6 文件清单中的全部文件 | 二选一：节点从内网文件站 `file_url` 下载（默认，适合节点多）；或由控制机把本仓库 `artifacts/` 推送到节点（`artifact_source: repo`，适合文件站未准备好或小集群） |
+| 二进制、Chart、公钥 | 手册 1.6 文件清单中的全部文件 | 控制机把本仓库 `artifacts/`（79MB 级）校验后推送到节点（决策 #39，统一单来源；文件站分发已取消） |
 | 镜像 | 手册 1.6 镜像清单，全部推到 Harbor 公开项目 | 资源准备机推送，Ansible 不负责推送，只在阶段 30 做检查 |
 | deb 包 | Kubernetes 源与系统包都在内网 apt 站 | 内网 apt 站 |
 | Harbor CA | 集群专属，不入仓库 | 放在控制机上该集群的 `files/harbor-ca.crt` |
 
-校验方式：文件站模式用 `get_url` 的 `checksum` 参数指向 `SHA256SUMS`（前提是该文件使用展平后的文件名，决策 #25 已要求；否则条目匹配不上）；仓库模式由控制机对 `artifacts/checksums/SHA256SUMS` 校验通过后再推送。校验失败就停止，不会继续安装。`Release.key` 另外还要核对 sha256 与 GPG 指纹。**节点上不得访问公网**。
+校验方式：控制机对 `artifacts/checksums/SHA256SUMS` 全量校验（仓库相对路径，决策 #25），逐文件断言 `: OK` 后再经 `copy` 推送；`copy` 幂等，重跑只推变化的文件。校验失败就停止，不会继续安装。`Release.key` 另外还要核对 sha256 与 GPG 指纹。**节点上不得访问公网**。
 
 ### 3.4 Inventory
 
@@ -133,7 +133,6 @@ k8s-cluster-deployer/
   - `etcd_quota_bytes`（默认 4294967296）；
   - `gw_http_redirect`（默认 `false`）：是否创建 80 → 443 的跳转；
   - `worker_batch_size`（默认 10）；
-  - `artifact_source`（默认 `file_url`）；
   - `pin_kernel`、`purge_old_kernels`（均默认 `false`）；
   - `preload_images`：worker 预拉的业务镜像列表，取代手册里的 `IMAGE_LIST` 文件；
   - `k8s_release_key_sha256`、`k8s_release_key_fingerprint`：`Release.key` 的校验值。
@@ -244,7 +243,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 4 章，并确认后续需要的镜像都在 Harbor 里。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **containerd 2.3.0**：获取并校验压缩包与 systemd 单元（单元文件随 artifact 渠道取到 `package_dir`，file_url 模式同样吃 SHA256SUMS 校验；仓库侧源文件是 `templates/systemd/containerd.service.j2`，纯静态内容）；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；从 `package_dir` 安装单元，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
+  1. **containerd 2.3.0**：获取并校验压缩包与 systemd 单元（单元文件随 artifact 渠道取到 `package_dir`，同样受控于控制机侧校验；仓库侧源文件是 `templates/systemd/containerd.service.j2`，纯静态内容）；当前版本不是 2.3.0 才解压安装，只装到 `/usr/local/bin`，并确认只有这一个 `containerd`；从 `package_dir` 安装单元，确认 `ExecStart` 是 `/usr/local/bin/containerd`。
   2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/google_containers/pause:3.10.2`（与 kubeadm 的 `imageRepository` 同路径，决策 #4）；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4；2.x 的 default 输出是单引号，且 transfer 段也有 `config_path` 键，替换必须锚定 registry 段头，不能按 `"config_path = \"\"` 字面匹配）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。三处替换与解压安装都挂 `Restart containerd` 通知，flush 点在 Harbor 访问配置之前（后续 hosts.toml 依赖运行态）。
   3. **Harbor 访问**（修订点 4）：对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。生产环境不使用 `skip_verify`。
   4. **runc 1.4.2**：获取并校验 `runc.amd64` 与 `runc.sha256sum`；卸载 apt 版 runc；安装到 `/usr/local/sbin/runc`；变更后重启 containerd。
@@ -426,7 +425,7 @@ k8s-cluster-deployer/
 
 ## 8. 测试与交付节奏
 
-每个里程碑的完成标准都一样：语法检查与 `ansible-lint` 通过；在测试环境（3 master + 2 worker，双网卡，能访问内网 Harbor、apt 站、文件站）连续运行两次，第二次没有变更；对应阶段的验证全部通过。
+每个里程碑的完成标准都一样：语法检查与 `ansible-lint` 通过；在测试环境（3 master + 2 worker，双网卡，能访问内网 Harbor、apt 站）连续运行两次，第二次没有变更；对应阶段的验证全部通过。
 
 | 里程碑 | 内容 | 额外验收 |
 | --- | --- | --- |

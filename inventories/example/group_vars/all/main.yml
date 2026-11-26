@@ -15,7 +15,6 @@ ntp_servers:                            # 内网 NTP，建议至少 2 个
 
 ## 派生变量（勿手填）
 registry: "{{ harbor }}/k8s_dmz"        # 系统镜像项目，必须为公开项目
-file_url: "{{ mirror }}/repository/tmp-file/k8sv1.36"
 
 ## 网卡与网段（双网卡：内网承 API/etcd/Pod，外网承默认路由/业务入口）
 node_iface: eth1
@@ -48,7 +47,6 @@ etcd_quota_bytes: 4294967296            # 4G；2147483648 为 2G（etcd 默认�
 
 ## Ansible 行为开关（实施方案 §4）
 worker_batch_size: 10                   # join-workers 每批 worker 数
-artifact_source: file_url               # file_url=节点从文件站下载（默认）；repo=控制机从本仓库 artifacts/ 推送
 pin_kernel: false                       # kernel-pin 总开关，true 才执行（会重启节点，单独执行）
 purge_old_kernels: false                # 清理旧内核开关（kernel-pin ④）
 journald_system_max_use: 4G
