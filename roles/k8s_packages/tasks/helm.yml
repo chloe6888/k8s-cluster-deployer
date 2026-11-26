@@ -1,0 +1,42 @@
+---
+# Calico / MetalLB / Envoy Gateway 阶段由 master01 调用；
+# 三台 master 都装，master01 故障后可在其他 master 上继续操作。
+- name: Install helm
+  tags: [kubeadm]
+  when: inventory_hostname in groups['masters']
+  block:
+    - name: Fetch the helm tarball (verified on fetch)
+      ansible.builtin.import_role:
+        name: artifact
+      vars:
+        artifact_file: "helm-v{{ helm_version }}-linux-amd64.tar.gz"
+
+    # 按版本号建目录：升级 helm_version 时不会命中旧版本留下的解压结果
+    - name: Create the helm extract directory
+      ansible.builtin.file:
+        path: "/tmp/helm-{{ helm_version }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract the helm binary
+      ansible.builtin.unarchive:
+        src: "{{ package_dir }}/helm-v{{ helm_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/helm-{{ helm_version }}"
+        remote_src: true
+        extra_opts: [--strip-components=1]
+        creates: "/tmp/helm-{{ helm_version }}/helm"
+
+    - name: Copy helm to /usr/local/bin
+      ansible.builtin.copy:
+        src: "/tmp/helm-{{ helm_version }}/helm"
+        dest: /usr/local/bin/helm
+        mode: "0755"
+        remote_src: true
+
+    - name: Verify the helm version
+      ansible.builtin.command:
+        cmd: helm version --short
+      register: pkg_helm_ver
+      changed_when: false
+      failed_when: pkg_helm_ver.stdout is not search('v' ~ helm_version)
+      check_mode: false

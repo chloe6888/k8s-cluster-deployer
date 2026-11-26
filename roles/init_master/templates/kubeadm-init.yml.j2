@@ -9,10 +9,7 @@ nodeRegistration:
   name: {{ node_name }}
   criSocket: unix:///run/containerd/containerd.sock   # 显式声明，不靠探测
   imagePullPolicy: IfNotPresent
-  taints: []                               # master 可调度业务，显式清空（不写则 kubeadm 会默认打 control-plane 污点）
-  kubeletExtraArgs:
-  - name: node-ip                          # 双网卡：显式指定内网 IP
-    value: "{{ node_ip }}"
+  taints: []                               # master 可调度业务，显式清空
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration

@@ -1,5 +1,5 @@
 ---
-# 阶段 40：K8s 软件包（手册 5.1 apt 源信任链 + 5.2 crictl），全部节点并行。
+# K8s 软件包（手册 5.1 apt 源信任链 + 5.2 crictl），全部节点并行。
 - name: Install the K8s packages
   tags: [kubeadm]
   block:
@@ -30,7 +30,7 @@
       ansible.builtin.debug:
         msg: >-
           警告：k8s_release_key_sha256 / k8s_release_key_fingerprint 未填写，跳过指纹核对。
-          公钥可信度只依赖内网镜像站，请在 group_vars 登记后重跑阶段 40。
+          公钥可信度只依赖内网镜像站，请在 group_vars 登记后重跑。
       when: (k8s_release_key_sha256 | default('')) == '' or (k8s_release_key_fingerprint | default('')) == ''
 
     # 不一致立即停止——信任链只靠内网镜像站

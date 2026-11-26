@@ -1,7 +1,10 @@
 ---
-# 阶段 40：kubelet / kubeadm / kubectl / crictl（手册 5.1、5.2）。全部节点并行。
+# kubelet / kubeadm / kubectl / crictl（手册 5.1、5.2）全部节点并行；helm 仅 master。
 - name: Import the install tasks
   ansible.builtin.import_tasks: install.yml
+
+- name: Import the helm tasks
+  ansible.builtin.import_tasks: helm.yml
 
 - name: Import the verify tasks
   ansible.builtin.import_tasks: verify.yml

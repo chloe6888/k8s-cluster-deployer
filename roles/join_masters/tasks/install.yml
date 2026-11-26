@@ -1,5 +1,5 @@
 ---
-# 阶段 51：master02/03 加入控制面（手册 5.5）。kubectl/etcd 核对统一 delegate 到 master01。
+# master02/03 加入控制面。kubectl/etcd 核对统一 delegate 到 master01。
 - name: Join the control plane
   tags: [kubeadm]
   environment:
@@ -8,7 +8,7 @@
     ansible.builtin.shell:
       executable: /bin/bash
   block:
-    # 手册 5.5：kubelet.conf 存在即已加入，整段跳过
+    # kubelet.conf 存在即已加入，整段跳过
     - name: Skip when already joined (kubelet.conf exists)
       ansible.builtin.stat:
         path: /etc/kubernetes/kubelet.conf
@@ -18,7 +18,7 @@
       when: not jm_joined.stat.exists
       block:
         # ---- 在 master01 现场生成本节点专用凭据 ----
-        # 手册 5.5：1h TTL；输出即凭据，no_log
+        # 1h TTL；输出即凭据，no_log
         - name: Create a fresh bootstrap token
           ansible.builtin.command:
             cmd: kubeadm token create

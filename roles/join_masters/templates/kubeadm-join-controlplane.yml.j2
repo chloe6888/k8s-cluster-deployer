@@ -10,10 +10,8 @@ discovery:
       - sha256:{{ jm_ca_hash.stdout | trim }}
 nodeRegistration:
   name: {{ node_name }}
-  criSocket: unix:///run/containerd/containerd.sock   # 修订 7
-  taints: []                               # 修订 6：master 不加污点
-  kubeletExtraArgs:
-    node-ip: {{ node_ip }}
+  criSocket: unix:///run/containerd/containerd.sock  
+  taints: []                               # master 不加污点
 controlPlane:
   apiserverAdvertiseAddress: {{ node_ip }}   # 只通告内网 IP
   apiserverBindPort: 6443
