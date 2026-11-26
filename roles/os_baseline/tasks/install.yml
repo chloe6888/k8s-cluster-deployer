@@ -80,40 +80,18 @@
         state: present
         update_cache: false
 
-    - name: Disable nftables service autostart
+    # 手册 2.3：装完就关——不启动、不开机启动；mask 防日后误启动
+    # （start / reload 会先 flush ruleset，清掉 kube-proxy / Calico 的表）
+    - name: Disable and stop the nftables service
       ansible.builtin.systemd:
         name: nftables
         enabled: false
+        state: stopped
 
-    # mask 后 start/stop/reload 均被 systemd 拒绝，彻底杜绝误启
     - name: Mask the nftables service
       ansible.builtin.systemd:
         name: nftables
         masked: true
-
-    # 手册 2.3：默认不做；新装集群节点上空闲的 nftables 服务才考虑停掉
-    - name: Optionally stop the idle nftables service
-      when: nftables_stop_if_idle | bool
-      block:
-        - name: Read nftables service state and ruleset
-          ansible.builtin.command:
-            cmd: "{{ item }}"
-          loop:
-            - systemctl is-active nftables
-            - nft list ruleset
-          register: os_nft_idle_probe
-          changed_when: false
-          check_mode: false
-
-        # 未加入集群（无 tunl0）+ 规则集为空 + 服务 active 三个条件都满足才停
-        - name: Stop only when not clustered, ruleset empty, and service active
-          ansible.builtin.systemd:
-            name: nftables
-            state: stopped
-          when:
-            - not (ansible_interfaces | default([]) | intersect(['tunl0']))
-            - os_nft_idle_probe.results[0].stdout == 'active'
-            - os_nft_idle_probe.results[1].stdout | trim == ''
 
     # 手册 2.4
     - name: Check swap status

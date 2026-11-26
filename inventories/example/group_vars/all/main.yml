@@ -55,7 +55,6 @@ worker_batch_size: 10                   # join-workers 每批 worker 数
 artifact_source: file_url               # file_url=节点从文件站下载（默认）；repo=控制机从本仓库 artifacts/ 推送
 pin_kernel: false                       # kernel-pin 总开关，true 才执行（会重启节点，单独执行）
 purge_old_kernels: false                # 清理旧内核开关（kernel-pin ④）
-nftables_stop_if_idle: false            # 见 os_baseline；默认不动该服务
 journald_system_max_use: 4G
 preload_images: []                      # worker 预拉业务镜像（原 IMAGE_LIST），如 ["demo.example/app:v1.0"]
 busybox_tag: ""                         # verify 连通性测试镜像 tag；为空则跳过该测试

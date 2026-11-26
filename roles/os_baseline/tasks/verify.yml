@@ -47,12 +47,12 @@
       failed_when: os_swapon_after.stdout | trim != ''
       check_mode: false
 
-    - name: Verify nftables is masked
+    - name: Verify nftables is masked and inactive
       ansible.builtin.command:
-        cmd: systemctl show -p UnitFileState nftables
+        cmd: systemctl show -p UnitFileState -p ActiveState nftables
       register: os_nft_state
       changed_when: false
-      failed_when: os_nft_state.stdout != 'UnitFileState=masked'
+      failed_when: os_nft_state.stdout_lines != ['UnitFileState=masked', 'ActiveState=inactive']
       check_mode: false
 
     # 初次同步最多等 2 分钟（24 次 × 5 秒）；先确认有输出再匹配已同步源（^\*）

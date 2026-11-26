@@ -135,7 +135,6 @@ k8s-cluster-deployer/
   - `worker_batch_size`（默认 10）；
   - `artifact_source`（默认 `file_url`）；
   - `pin_kernel`、`purge_old_kernels`（均默认 `false`）；
-  - `nftables_stop_if_idle`（默认 `false`）；
   - `preload_images`：worker 预拉的业务镜像列表，取代手册里的 `IMAGE_LIST` 文件；
   - `k8s_release_key_sha256`、`k8s_release_key_fingerprint`：`Release.key` 的校验值。
 - 外网 API 的授权网段 `ext_api_allowed_cidr` 必须是列表，且不能包含 `0.0.0.0/0`。
@@ -193,15 +192,14 @@ k8s-cluster-deployer/
   3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：
      - 只装 `nftables` 命令行工具，不使用它的服务；
-     - 设置**禁止开机启动**，再 **mask**；**不要**对它执行 `stop`，也不要用 `disable --now`；
-     - 原因：该服务的 `ExecStop` 就是 `nft flush ruleset`，停止它会清空 kube-proxy、Calico 和主机防火墙的全部规则；服务显示 active 只是"规则已加载"的标记，不影响运行；
-     - 如果你希望新装节点上它处于停止状态，可把 `nftables_stop_if_idle` 设为 true。只有同时满足"节点尚未加入集群、`nft list ruleset` 为空、服务当前 active"才会真的停止，否则跳过并提示；
+     - 安装后立即 `disable` + `stop` + `mask`（决策 #36）：不启动、不开机启动、防误启动；
+     - 原因：该服务 start / reload / stop 都会执行 `nft flush ruleset`，清空 kube-proxy、Calico 和主机防火墙的全部规则；mask 之后无法被误启动；
      - 任何阶段都禁止 `nft flush ruleset`。
   5. **关闭 swap**：有 swap 就 `swapoff -a`，并注释 `/etc/fstab` 里 `/swap.img` 那一行。
   6. **DNS**：确认 `/run/systemd/resolve/resolv.conf` 存在；不存在就安装并启动 `systemd-resolved`。
   7. **时间同步**：安装 chrony（会自动卸载 timesyncd，属预期）；配置里只写 `ntp_servers` 每个地址一行 `server … iburst`，不配 `allow` 与 `local`；其余参数同手册 2.7；启动并设为开机启动。
   8. **journald**：写入容量限制配置（`SystemMaxUse` 取 `journald_system_max_use`，默认 4G），重启 journald。
-- **验证**：9 项 sysctl 与手册一致；swap 为 0；`nftables` 为 masked；`chronyc sources` 至少有一个可用源（初次同步最多等 2 分钟）；Harbor 域名可解析。
+- **验证**：9 项 sysctl 与手册一致；swap 为 0；`nftables` 为 masked 且 inactive；`chronyc sources` 至少有一个可用源（初次同步最多等 2 分钟）；Harbor 域名可解析。
 - **注意**：第一次执行有配置变更属正常，第二次必须没有变更。
 
 ### 6.3 阶段 11：固定内核（单独执行）
