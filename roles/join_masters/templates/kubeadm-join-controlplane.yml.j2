@@ -13,6 +13,7 @@ nodeRegistration:
   criSocket: unix:///run/containerd/containerd.sock  
   taints: []                               # master 不加污点
 controlPlane:
-  apiserverAdvertiseAddress: {{ node_ip }}   # 只通告内网 IP
-  apiserverBindPort: 6443
+  localAPIEndpoint:
+    advertiseAddress: {{ node_ip }}   # 只通告内网 IP
+    bindPort: 6443
   certificateKey: {{ jm_upload.stdout_lines | last | trim }}
