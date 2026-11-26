@@ -1,0 +1,76 @@
+name: Temporary audit checks on latest main snapshot
+
+on:
+  push:
+    branches:
+      - audit/review-a719b85
+    paths:
+      - ".github/workflows/audit-latest-checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/review-a719b85
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ansible-core ansible-lint yamllint
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+      - name: ansible-lint
+        run: ansible-lint
+      - name: yamllint
+        run: yamllint .
+      - name: Syntax-check every playbook
+        shell: bash
+        run: |
+          set -euo pipefail
+          for p in playbooks/*.yml; do
+            echo "Checking $p"
+            ansible-playbook -i inventories/example/hosts.yml "$p" --syntax-check
+          done
+      - name: Shell syntax and artifact integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          for s in scripts/*.sh; do bash -n "$s"; done
+          scripts/verify-checksums.sh
+          scripts/package-offline.sh /tmp/offline
+          (cd /tmp/offline && sha256sum -c SHA256SUMS)
+      - name: Reproduce loop failed_when pattern used by preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/loop.yml <<'EOF'
+          ---
+          - hosts: localhost
+            connection: local
+            gather_facts: false
+            tasks:
+              - name: This is the same failed_when access pattern used in preflight
+                ansible.builtin.stat:
+                  path: "{{ item }}"
+                loop:
+                  - /etc/hosts
+                  - /etc/passwd
+                register: preflight_ifaces
+                failed_when: not preflight_ifaces.results[idx].stat.exists
+                loop_control:
+                  index_var: idx
+          EOF
+          set +e
+          ansible-playbook /tmp/loop.yml > /tmp/loop.log 2>&1
+          rc=$?
+          set -e
+          grep -q "object of type 'dict' has no attribute 'results'" /tmp/loop.log
+          test "$rc" -ne 0
+          echo "CONFIRMED: current Ansible rejects the repository's per-iteration results[idx] access"
