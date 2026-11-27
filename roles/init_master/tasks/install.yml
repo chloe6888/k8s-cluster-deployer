@@ -59,10 +59,19 @@
 
     # 输出含 join token，但 token 24h 过期且 join 时会重新生成；
     # 不加 no_log，保证失败时能直接看到原因
+    # 决策 #49：静态 Pod 冷启动（sandbox→etcd 健康→apiserver）+ HAProxy 后端
+    # check-ssl 转绿的总耗时可能超过 kubeadm 内部 bootstrap 的 ~60s 硬超时，
+    # wait-control-plane 阶段报 context deadline exceeded——test 集群实测此场景，
+    # 重跑即过（证书/kubeconfig 复用，kubeadm init 对该失败模式可重入）。
+    # 自动重试一次把慢启动自愈；真故障第二次仍会红，不掩盖问题
     - name: Run kubeadm init
       when: init_cluster_state.rc != 0
       ansible.builtin.command:
         cmd: kubeadm init --config /etc/kubeadm/kubeadm-init.yml
+      register: kubeadm_init_run
+      retries: 2
+      delay: 30
+      until: kubeadm_init_run.rc == 0
       changed_when: true
 
     # 验证 v1beta4 的有效期字段确实生效：19 年后仍有效（599184000 = 19 × 365 × 86400 秒）

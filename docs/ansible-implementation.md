@@ -280,7 +280,7 @@ k8s-cluster-deployer/
 - **步骤**：
   1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`（决策 #48：ext_vip 不进 SAN）；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
   2. 用 `kubeadm config validate` 校验配置，不通过就停止。
-  3. 只在集群尚未初始化时执行（判据：apiserver 中不存在 `kube-system/kubeadm-config`；不用 `admin.conf` 是否存在来判断，因为 init 中途失败也会留下它）：先确认 `vip:vip_port` 可连，再 `kubeadm config images pull`，再 `kubeadm init --config`。不加 `--upload-certs`，join 凭据由 6.8 每台现生成；init 输出不屏蔽，失败时能直接看到原因。
+  3. 只在集群尚未初始化时执行（判据：apiserver 中不存在 `kube-system/kubeadm-config`；不用 `admin.conf` 是否存在来判断，因为 init 中途失败也会留下它）：先确认 `vip:vip_port` 可连，再 `kubeadm config images pull`，再 `kubeadm init --config`，命令自动重试 2 次、间隔 30s（决策 #49：静态 Pod 冷启动+HAProxy 后端转绿可能超过 kubeadm 内部 ~60s bootstrap 超时，该失败模式下 init 可重入、证书复用，重试自愈慢启动）。不加 `--upload-certs`，join 凭据由 6.8 每台现生成；init 输出不屏蔽，失败时能直接看到原因。
   4. 把 `admin.conf` 复制到 `~/.kube/config`，权限 0600。
   5. **证书有效期校验**：用 `openssl x509 -checkend 599184000`（19 年）确认 `ca.crt` 与 `apiserver.crt` 确已按 20 年签发。helm 不在本阶段安装，已移到阶段 40（6.6 第 6 步）。
 - **验证**：
