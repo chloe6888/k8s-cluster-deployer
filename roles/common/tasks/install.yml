@@ -1,12 +1,23 @@
 ---
-# 公共前置：节点名拼装 + host_vars 显式性断言。所有 --tags 选择下都必须先执行，故打 always。
+# 公共前置：节点名确认 + host_vars 显式性断言。所有 --tags 选择下都必须先执行，故打 always。
 - name: Prepare the common node facts
   tags: [always]
   block:
-    # node_name 不单独存变量，由 cluster_prefix + 主机名拼出（与手册 ${CLUSTER_PREFIX}-k8s-master0N 一致）
+    # 节点名 = inventory 主机名（决策 #44）。主机名在节点创建阶段已配置好，本工程不代改
     - name: Compute the node name
       ansible.builtin.set_fact:
-        node_name: "{{ cluster_prefix }}-{{ inventory_hostname }}"
+        node_name: "{{ inventory_hostname }}"
+
+    # 决策 #44：不再代改主机名，改为一致性门禁——系统 hostname 与 inventory 不符时
+    # kubelet 的注册名会和 kubeadm nodeRegistration.name 分叉，这里尽早拦下让用户二选一修正
+    - name: Assert the system hostname matches the inventory name
+      ansible.builtin.assert:
+        that: ansible_hostname == inventory_hostname
+        fail_msg: >-
+          {{ inventory_hostname }} 的系统主机名是 {{ ansible_hostname }}，与 inventory 不一致。
+          本工程不代改主机名（节点创建阶段已配置）：改 inventory 主机名，
+          或在节点上执行 hostnamectl set-hostname {{ inventory_hostname }}，二选一后重跑。
+        quiet: true
 
     # 不用 ansible_default_ipv4：默认路由在外网网卡，会取到外网 IP
     - name: Assert node vars are explicitly set in host_vars

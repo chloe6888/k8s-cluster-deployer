@@ -4,7 +4,7 @@
 # 密码与证书路径在 vault.yml（见同目录 vault.yml.example，ansible-vault 加密）。
 
 ## 集群标识与内网服务
-cluster_prefix: demo                    # 全小写；用于节点名、HAProxy 后端名
+cluster_prefix: demo                    # 全小写；仅用于预检横幅与 kubeadm clusterName 等集群标识（决策 #44：不参与节点名/HAProxy 后端名，节点名=inventory 主机名）
 harbor: harbor.example.internal         # Harbor 域名（含端口时一并写入）
 mirror: http://mirror.example.internal  # 内网制品 / apt 镜像站根 URL
 app_registry: ""                        # 业务镜像仓库主机（为空则不单独配置 certs.d）

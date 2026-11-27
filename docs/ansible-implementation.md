@@ -107,7 +107,7 @@ k8s-cluster-deployer/
 ### 3.4 Inventory
 
 - 分组：`masters`（按 master01、02、03 的顺序写，这个顺序就是 keepalived 启动和 master 加入的顺序）、`workers`、`first_master`（只放 master01，凡是只在 master01 上做的阶段都用它）、`k8s_all`（前两者的合集）。
-- 主机名写 `k8s-master01`、`k8s-worker11` 这种形式；节点名 `node_name` 由 `cluster_prefix` 加主机名拼出，与手册的 `${CLUSTER_PREFIX}-k8s-master0N` 一致。
+- 主机名写 `k8s-master01`、`k8s-worker11` 这种形式；节点名 `node_name` 即 inventory 主机名（决策 #44）——主机名在节点创建阶段配置好，工程不代改，`common` 角色断言系统 hostname 与 inventory 一致（不符即中止），`cluster_prefix` 仅用于 clusterName 等集群标识。
 - 每个集群一个目录（`inventories/<集群名>/`），换集群就换目录。
 
 ---
@@ -185,7 +185,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 2 章（除内核固定外）。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **主机名与解析**：设置 `node_name` 为主机名；把所有节点（`node_ip` 与 `node_name`）写入 `/etc/hosts` 的受管区块；确认 Harbor 域名可解析。
+  1. **解析**：主机名不代改（决策 #44，节点创建阶段已配置，一致性由 `common` 断言把关）；把所有节点（`node_ip` 与 `node_name`）写入 `/etc/hosts` 的受管区块；确认 Harbor 域名可解析。
   2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。
   3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：

@@ -59,7 +59,7 @@
             {%- set out = [] -%}
             {%- for h in groups['k8s_all'] -%}
             {%- set _ = out.append({'name': h,
-                                    'node_name': cluster_prefix ~ '-' ~ h,
+                                    'node_name': h,
                                     'node_ip': hostvars[h]['node_ip'] | default(''),
                                     'node_ext_ip': hostvars[h]['node_ext_ip'] | default('')}) -%}
             {%- endfor -%}
