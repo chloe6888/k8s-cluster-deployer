@@ -74,12 +74,36 @@
       changed_when: false
       check_mode: false
 
+    # 决策 #51：只看 "values 文件本次有没有被改写" 不够——文件写好之后、helm upgrade
+    # 之前被打断（API 暂时不可达、超时等）时，下次重跑文件已是新内容、
+    # calico_values.changed 为假，release 仍是 deployed，升级被永久跳过而新 values
+    # 从未生效。所以拿 release 里实际生效的 values 与文件内容直接比较
+    # （metallb 用 lookup 现渲染比较、envoy 用期望字典，三角色同强度）。
+    # helm get values 只回显用户提交的 values：release 缺失时命令失败、stdout 为空，
+    # default('{}', true) 兜底后与文件必不相等 → 触发安装，语义正确
+    - name: Read the values applied to the current release
+      ansible.builtin.command:
+        cmd: helm get values calico -n tigera-operator -o json
+      register: calico_release_values
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read the rendered values file
+      ansible.builtin.slurp:
+        src: "{{ package_dir }}/charts/calico-values.yaml"
+      register: calico_values_file
+      failed_when: false
+      check_mode: false
+
     - name: Install or upgrade the Calico operator
       when: >-
         (calico_release.stdout | from_json | length) == 0
         or (calico_release.stdout | from_json | first).status != 'deployed'
         or (calico_release.stdout | from_json | first).chart != 'tigera-operator-v' ~ calico_version
         or calico_values.changed
+        or (calico_release_values.stdout | default('{}', true) | from_json)
+           != ((calico_values_file.content | default('e30=') | b64decode) | from_yaml)
       ansible.builtin.command:
         cmd: >-
           helm upgrade --install calico {{ package_dir }}/tigera-operator-v{{ calico_version }}.tgz

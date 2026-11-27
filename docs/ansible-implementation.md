@@ -68,7 +68,7 @@ k8s-cluster-deployer/
 3. **vault 文件必须放在 `group_vars/all/` 目录里**才会被自动加载（放成 `group_vars/vault.yml` 不会生效，因为没有名叫 `vault` 的组）。
 4. **离线依赖**：控制机也要离线可用，collection 用 `ansible-galaxy collection download` 入库。kubectl 与 helm 步骤用 `command`（行为与手册完全一致，排障直观，被管节点也不需要 Python `kubernetes` 库），稳定后再考虑换成 `kubernetes.core`。
 5. **下载校验**：控制机对 `artifacts/checksums/SHA256SUMS` 全量校验通过后再推送到节点（决策 #39，文件站分发已取消）；校验失败即停止。
-6. **敏感信息**：token、certificate-key、stats 密码、TLS 私钥所在的任务全部 `no_log: true`；TLS 临时文件只写 `/dev/shm`，用完删除。
+6. **敏感信息**：token、certificate-key、stats 密码所在的任务全部 `no_log: true`；TLS 临时文件只写 `/dev/shm`，用完删除。TLS 证书/私钥的 staging 任务用 `diff: false` 而非 `no_log`（决策 #51）：copy 结果本就不含文件内容、只有 `--diff` 才回显，而 `no_log` 会把 "src 路径写错" 一并吞成 "output has been hidden"；残留面是 `-v` 结果里的文件 sha256（哈希不可逆推，判可接受）。创建 Secret 的任务维持 `no_log`。
 7. **幂等**：每个任务第二次执行必须 `changed=0`，这是验收标准之一。不可幂等的步骤（内核清理、`kubeadm init/join`）用开关变量或 `creates` 保护。
 8. **标签对应章节**：`os`、`ha`、`runtime`、`kubeadm`、`cni`、`lb`、`gateway`、`verify`，支持单章重跑。
 9. **危险操作单独成 playbook，或标签默认不执行**：内核固定（11）、重置（99）、VIP 漂移演练（`failover`）、外网探测（`probe`）、连通性测试（`connectivity`）。
@@ -313,7 +313,7 @@ k8s-cluster-deployer/
   2. **nft 预检**（强制）：在节点上用 `calico/node:v3.32.2` 镜像运行 `nft list tables`，返回码必须是 0。3.32.0 的 nft 曾在这里崩溃，不通过就不要继续。
   3. **安装 CRD**：用 `helm template --include-crds` 渲染 CRD Chart 到文件，用 `kubectl diff --server-side` 判断有无差异，有差异才 **server-side apply**（CRD 太大，普通 apply 会超出注解长度上限）。`tigera-operator` 命名空间由 `helm upgrade --install --create-namespace` 创建。
   4. **渲染 values**（手册 6.4）：`manageCRDs: false`；`registry` 为 `${REGISTRY}/`（结尾要有斜杠）；BGP 开启；节点地址探测用 `node_cidr`；IP 池为 `pod_cidr`、IPIP、`blockSize 25`、`natOutgoing`；启用 apiServer；**显式关闭 goldmane 与 whisker**；operator 镜像 `tigera/operator:v1.42.6`；不设置 `imagePath`。
-  5. **安装 operator**（`helm upgrade --install --history-max 5`）：只在 release 不存在、状态不是 `deployed`、chart 版本变化或 values 文件有变化时执行。
+  5. **安装 operator**（`helm upgrade --install --history-max 5`）：只在 release 不存在、状态不是 `deployed`、chart 版本变化、values 文件有变化，**或 release 里实际生效的 values 与渲染文件内容不一致**（决策 #51：`helm get values` vs 文件比较——文件写盘后、upgrade 前被打断的话，下次重跑 `changed` 为假、升级会被永久跳过）时执行。三个 chart role 同强度：metallb 用 `lookup` 现渲染比较、envoy 用期望字典比较、calico 用 release-vs-文件比较。
   6. 等待 `tigerastatus` 全部为 Available（最多约 10 分钟）。
   7. **镜像核对**：核对 `calico-system` 里实际运行的 Pod 镜像都以 `${REGISTRY}/` 开头。`helm template` 的结果只含 operator 自己的镜像，其余组件镜像由 operator 按 `Installation.spec.registry` 在运行时生成，所以必须在安装后检查。
   8. 等待所有节点 Ready（最多约 10 分钟）。
@@ -353,15 +353,16 @@ k8s-cluster-deployer/
 - **主机**：master01。
 - **步骤**：
   1. 获取并校验 `gateway-helm-v1.7.1.tgz`；values 只设 `global.imageRegistry`；核对渲染出的镜像都是 `${REGISTRY}/envoyproxy/gateway:v1.7.1`。
-  2. 安装，等待 `envoy-gateway` 部署 Available；确认 Gateway API 的 CRD 已存在，缺失就停止。
-  3. 创建 EnvoyProxy 与 GatewayClass（手册 8.3）：数据面 2 副本、镜像 `envoyproxy/envoy:distroless-v1.37.1`、Service 类型 LoadBalancer、`externalTrafficPolicy: Cluster`、地址池 `pool-ext`、固定 IP 为 `gw_ext_ip`。
-  4. **创建 TLS Secret**（`gw_tls_enabled` 为 true 时）：
-     - 先在控制机上校验证书未过期，且证书与私钥匹配（公钥指纹相同）；
-     - 把证书与私钥写到 master01 的内存目录（`/dev/shm`）下的临时文件，权限 0600，任务不输出内容；
+  2. **预置 chart CRD**（决策 #51，与 Calico 同法）：chart 的 `crds/` 目录（20 个 CRD、约 3.2MB，其中 gatewayapi-crds / envoyproxies / securitypolicies 三个单体超过 256KiB 的注解上限）只在 `helm install` 时创建、`helm upgrade` 永远不更新——升级 Chart 版本时若不先更新，新版控制面会跑在旧 CRD 上。流程：`helm show crds` 渲染到文件（`grep -q CustomResourceDefinition` 兜空文件）→ `kubectl diff --server-side` → 有差异才 server-side apply；首装时先建好 CRD，随后 `helm install` 遇已存在的 CRD 会跳过，不冲突。
+  3. 安装，等待 `envoy-gateway` 部署 Available；确认 Gateway API 的 CRD 已存在，缺失就停止。
+  4. 创建 EnvoyProxy 与 GatewayClass（手册 8.3）：数据面 2 副本、镜像 `envoyproxy/envoy:distroless-v1.37.1`、Service 类型 LoadBalancer、`externalTrafficPolicy: Cluster`、地址池 `pool-ext`、固定 IP 为 `gw_ext_ip`。
+  5. **创建 TLS Secret**（`gw_tls_enabled` 为 true 时）：
+     - 校验证书与私钥匹配（公钥指纹相同），并拦已过期或临近过期的证书：剩余有效期不足 `gw_tls_min_valid_days`（role 默认 30 天，设 0 只拦已过期）即中止——否则要等客户端 HTTPS 报证书错误才发现；
+     - 把证书与私钥写到 master01 的内存目录（`/dev/shm`）下的临时文件，权限 0600，任务 `diff: false`（内容只在 `--diff` 模式回显，报错信息保持可见，见 §3 敏感信息）；
      - 用 `kubectl create secret tls … --dry-run | kubectl apply` 创建，Secret 名为 `gw_tls_secret`、命名空间为 `envoy-gateway-system`；
      - 无论成功失败，**都要删除临时文件**。
-  5. 创建 Gateway `gw-ext`：监听器 `http`（80）；启用 TLS 时增加监听器 `https`（443，TLS 终止，引用上面的 Secret）；两个监听器的 `allowedRoutes` 都是 `from: All`（风险接受项，多团队共用集群时应改为按标签选择）。
-  6. **可选 HTTP 跳转**（`gw_http_redirect` 为 true 才创建，默认 false）：创建挂在 `http` 监听器上的路由，把请求 301 跳转到 https。注意它会接管 80 上所有未被其他路由匹配的请求。
+  6. 创建 Gateway `gw-ext`：监听器 `http`（80）；启用 TLS 时增加监听器 `https`（443，TLS 终止，引用上面的 Secret）；两个监听器的 `allowedRoutes` 都是 `from: All`（风险接受项，多团队共用集群时应改为按标签选择）。
+  7. **可选 HTTP 跳转**（`gw_http_redirect` 为 true 才创建，默认 false）：创建挂在 `http` 监听器上的路由，把请求 301 跳转到 https。注意它会接管 80 上所有未被其他路由匹配的请求。
 - **验证**：
   - `gw-ext` 的 `Programmed` 为 True，每个监听器也是；
   - Envoy 的 Service 的外网 IP 等于 `gw_ext_ip`（最多等约 2.5 分钟），端口包含 80 与 443；

@@ -1,0 +1,4 @@
+---
+# 决策 #51：TLS 证书剩余有效期门禁（天）。证书不足 N 天到期即中止 gateway 阶段，
+# 提前于客户端 HTTPS 报错；设 0 则只拦已过期。集群可在 group_vars 覆盖
+gw_tls_min_valid_days: 30

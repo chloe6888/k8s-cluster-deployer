@@ -44,6 +44,37 @@
         or (gw_images.stdout_lines | reject('search', registry | regex_escape) | list | length) > 0
       check_mode: false
 
+    # 手册 8.2：chart 的 crds/ 目录（20 个 CRD、约 3.2MB，其中 3 个单体超过 256KiB 的
+    # 注解上限——gatewayapi-crds / envoyproxies / securitypolicies，仓库介质实测）
+    # 只在 helm install 时创建，helm upgrade 永远不更新 CRD——升级 Chart 版本时若不先更新，
+    # 新版控制面会跑在旧 CRD 上。与 Calico 同法：渲染 → server-side diff → server-side apply
+    # （首装时 CRD 不存在，先建好；随后 helm install 遇到已存在的 CRD 会跳过，不冲突）。
+    # envoy 的 CRD 在主 chart 的 crds/ 里，用 helm show crds 提取（Calico 是独立 CRD chart，
+    # 用 helm template --include-crds，两处命令不同是介质形态决定的）
+    - name: Render the chart CRDs
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          helm show crds {{ package_dir }}/gateway-helm-v{{ envoy_gateway_version }}.tgz \
+            > {{ package_dir }}/charts/envoy-gateway-crds.yaml
+          grep -q CustomResourceDefinition {{ package_dir }}/charts/envoy-gateway-crds.yaml
+      changed_when: false
+      check_mode: false
+
+    - name: Diff the chart CRDs against the cluster
+      ansible.builtin.command:
+        cmd: kubectl diff --server-side -f {{ package_dir }}/charts/envoy-gateway-crds.yaml
+      register: gw_crd_diff
+      changed_when: gw_crd_diff.rc == 1
+      failed_when: gw_crd_diff.rc not in [0, 1]
+      check_mode: false
+
+    - name: Apply the chart CRDs server-side
+      when: gw_crd_diff.rc == 1
+      ansible.builtin.command:
+        cmd: kubectl apply --server-side --force-conflicts -f {{ package_dir }}/charts/envoy-gateway-crds.yaml
+      changed_when: true
+
     # 手册 8.2：helm upgrade 每次都产生新 revision，先比较 chart 与 values 再决定是否执行。
     # chart 版本带不带 v 前缀因发布而异，用 v? 兼容两种
     - name: Read the current Envoy Gateway release
@@ -121,26 +152,36 @@
     - name: TLS Secret
       when: gw_tls_enabled | bool
       block:
-        # 手册 8.4①：tmpfs，掉电即失；内容即密钥，整任务 no_log。
-        # gw_tls_cert / gw_tls_key 是控制机上的文件路径，必须用 src 拷贝内容
+        # 手册 8.4①：tmpfs，掉电即失。gw_tls_cert / gw_tls_key 是控制机上的文件路径，必须用 src 拷贝内容。
+        # 决策 #51：copy 的返回里没有文件内容，只有 --diff 才会把内容打出来，所以用
+        # diff: false 而不是 no_log——no_log 会把 "找不到 src 文件" 这类报错一并吞掉，
+        # 路径写错时只看到 "output has been hidden"。残留面：-v 下结果含文件 sha256
+        # （私钥哈希不可逆推，判可接受；如需收紧改回 no_log 并记翻案）
         - name: Stage the cert and key in /dev/shm
           ansible.builtin.copy:
             src: "{{ item.src }}"
             dest: "{{ item.dest }}"
             mode: "0600"
-          no_log: true
+          diff: false
           loop:
             - src: "{{ gw_tls_cert }}"
               dest: /dev/shm/gw-tls.crt
             - src: "{{ gw_tls_key }}"
               dest: /dev/shm/gw-tls.key
+          loop_control:
+            label: "{{ item.dest }}"
 
-        # 手册 8.4①：证书与私钥配对不上，后面的 Secret 会把问题带到网关层
+        # 手册 8.4①：证书与私钥配对不上，后面的 Secret 会把问题带到网关层。
+        # 决策 #51：另拦已过期或即将过期的证书（gw_tls_min_valid_days，role 默认 30 天；
+        # 设 0 则只拦已过期）——实施方案 §6 本就要求"先校验证书未过期"，原先只有展示
+        # 没有判定，这里补齐门禁；否则要等到客户端 HTTPS 报证书错误才发现
         - name: Verify the cert and key match and show cert info
           ansible.builtin.shell:
             cmd: |
               set -euo pipefail
               openssl x509 -in /dev/shm/gw-tls.crt -noout -subject -enddate -ext subjectAltName
+              openssl x509 -in /dev/shm/gw-tls.crt -noout -checkend {{ (gw_tls_min_valid_days | int) * 86400 }} >/dev/null \
+                || { echo "证书已过期或将在 {{ gw_tls_min_valid_days | int }} 天内到期" >&2; exit 1; }
               test "$(openssl x509 -in /dev/shm/gw-tls.crt -noout -pubkey | sha256sum | awk '{print $1}')" \
                 = "$(openssl pkey -in /dev/shm/gw-tls.key -pubout | sha256sum | awk '{print $1}')"
           changed_when: false
