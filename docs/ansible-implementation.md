@@ -144,7 +144,7 @@ k8s-cluster-deployer/
 | # | 手册位置 | 问题 | 实施时的处理 |
 | --- | --- | --- | --- |
 | 1 | 3.2 外网 frontend | 定义了 `EXT_API_ALLOWED_CIDR` 却没使用，外网 16443 实际对所有来源开放 | 外网 frontend 增加源地址白名单，不在白名单内的连接直接拒绝。**2026-11-26 随决策 #37 取消**：白名单与 `ext_api_allowed_cidr` 变量移除，外网入口访问控制由网络侧（安全组 / 防火墙）落实 |
-| 2 | 5.4 `certSANs` | 缺外网 VIP，运维机经外网 VIP 访问 API 会证书校验失败 | 加入 `ext_vip`；另加 `localhost`、`127.0.0.1`，额外地址由各集群 inventory 的 `extra_cert_sans` 提供 |
+| 2 | 5.4 `certSANs` | ~~缺外网 VIP，运维机经外网 VIP 访问 API 会证书校验失败~~ | **2026-11-27 随决策 #48 取消**：`ext_vip` 移出 certSANs——外网访问走 NGINX 入口（地址在 `extra_cert_sans`），无客户端以 ext_vip 直连 apiserver；certSANs 与手册 5.4 对齐（内网 VIP、各 master IP+主机名、`localhost`、`127.0.0.1`），额外地址由各集群 inventory 的 `extra_cert_sans` 提供 |
 | 3 | 3.1、3.3 | 健康检查脚本用到 `socat`，但没有安装 | 与 HAProxy 一起安装 |
 | 4 | 4.2 | 提到 Harbor CA 与 `hosts.toml`，但没有写入节点的步骤 | 阶段 30 补：写入 CA、写 `hosts.toml`、设置 containerd 的 `config_path` |
 | 5 | 5.4 | `etcd` 配置放在 `KubeProxyConfiguration` 之后，会被当作 kube-proxy 的字段 | 放回 `ClusterConfiguration` 内，与 `networking` 同级 |
@@ -278,7 +278,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册 5.4、5.5、5.7。
 - **主机**：master01。
 - **步骤**：
-  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、外网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
+  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`（决策 #48：ext_vip 不进 SAN）；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
   2. 用 `kubeadm config validate` 校验配置，不通过就停止。
   3. 只在集群尚未初始化时执行（判据：apiserver 中不存在 `kube-system/kubeadm-config`；不用 `admin.conf` 是否存在来判断，因为 init 中途失败也会留下它）：先确认 `vip:vip_port` 可连，再 `kubeadm config images pull`，再 `kubeadm init --config`。不加 `--upload-certs`，join 凭据由 6.8 每台现生成；init 输出不屏蔽，失败时能直接看到原因。
   4. 把 `admin.conf` 复制到 `~/.kube/config`，权限 0600。

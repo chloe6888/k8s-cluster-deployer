@@ -19,9 +19,12 @@ certificatesDir: /etc/kubernetes/pki
 imageRepository: {{ registry }}/google_containers   # 离线必备：images pull 与静态 Pod 镜像引用都取自此
 controlPlaneEndpoint: {{ vip }}:{{ vip_port }}      # HAProxy 前置 VIP
 apiServer:
+  # 决策 #48：SAN 只收实际访问路径——内网 VIP、各 master 直连 IP+主机名（HA 层
+  # 故障时的救火通道）、extra_cert_sans（外网 NGINX 入口）、localhost。
+  # ext_vip 不进 SAN：外网访问走 NGINX 入口（在 extra_cert_sans），
+  # 无客户端以 ext_vip 地址直连 apiserver（HAProxy 虽仍 bind 该地址）
   certSANs:
   - {{ vip }}
-  - {{ ext_vip }}
 {% for h in groups['masters'] %}
   - {{ hostvars[h]['node_ip'] }}
   - {{ h }}
