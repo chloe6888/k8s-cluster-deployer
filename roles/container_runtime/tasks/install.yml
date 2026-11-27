@@ -134,12 +134,16 @@
       vars:
         artifact_files: [runc.amd64, runc.sha256sum]
 
-    # 手册 4.3：grep 无匹配时管道会给 sha256sum 空输入而误报成功，必须 pipefail
+    # 手册 4.3：grep 无匹配时管道会给 sha256sum 空输入而误报成功，必须 pipefail。
+    # sha256sum -c 对清单里的相对路径按进程 cwd 解析（不看清单文件所在目录），
+    # 任务必须 chdir 到 package_dir——远端默认 cwd 是家目录，实测报
+    # "runc.amd64: No such file or directory"（手册流程 wget 就落在家目录所以没这问题）
     - name: Verify runc against the upstream checksum list
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
           grep ' runc.amd64$' {{ package_dir }}/runc.sha256sum | sha256sum -c -
+        chdir: "{{ package_dir }}"
       changed_when: false
       check_mode: false
 
