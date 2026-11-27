@@ -3,10 +3,10 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: gw-ext
+  name: {{ gw_gateway_name }}
   namespace: envoy-gateway-system
 spec:
-  gatewayClassName: eg
+  gatewayClassName: {{ gw_gatewayclass_name }}
   listeners:
   - name: http
     protocol: HTTP

@@ -129,7 +129,7 @@ k8s-cluster-deployer/
 - `node_ip` 必须显式写入（worker 内联 `hosts.yml`、master `host_vars/`），**不要用 `ansible_default_ipv4`**（默认路由在外网网卡，会取到外网 IP）。
 - 新增的变量（手册 1.3 里没有）：
   - `stats_user`、`stats_pass`：把手册的 `STATS_AUTH` 拆成两个；
-  - `gw_tls_cert`、`gw_tls_key`、`gw_tls_secret`（默认 `gw-ext-tls`）：Gateway 的 HTTPS 证书；
+  - `gw_tls_cert`、`gw_tls_key`、`gw_tls_secret`（默认 `gateway-external-tls`）：Gateway 的 HTTPS 证书；
   - `etcd_quota_bytes`（默认 4294967296）；
   - `gw_http_redirect`（默认 `false`）：是否创建 80 → 443 的跳转；
   - `worker_batch_size`（默认 10）；
@@ -355,16 +355,16 @@ k8s-cluster-deployer/
   1. 获取并校验 `gateway-helm-v1.7.1.tgz`；values 只设 `global.imageRegistry`；核对渲染出的镜像都是 `${REGISTRY}/envoyproxy/gateway:v1.7.1`。
   2. **预置 chart CRD**（决策 #51，与 Calico 同法）：chart 的 `crds/` 目录（20 个 CRD、约 3.2MB，其中 gatewayapi-crds / envoyproxies / securitypolicies 三个单体超过 256KiB 的注解上限）只在 `helm install` 时创建、`helm upgrade` 永远不更新——升级 Chart 版本时若不先更新，新版控制面会跑在旧 CRD 上。流程：`helm show crds` 渲染到文件（`grep -q CustomResourceDefinition` 兜空文件）→ `kubectl diff --server-side` → 有差异才 server-side apply；首装时先建好 CRD，随后 `helm install` 遇已存在的 CRD 会跳过，不冲突。
   3. 安装，等待 `envoy-gateway` 部署 Available；确认 Gateway API 的 CRD 已存在，缺失就停止。
-  4. 创建 EnvoyProxy 与 GatewayClass（手册 8.3）：数据面 2 副本、镜像 `envoyproxy/envoy:distroless-v1.37.1`、Service 类型 LoadBalancer、`externalTrafficPolicy: Cluster`、地址池 `pool-ext`、固定 IP 为 `gw_ext_ip`。
+  4. 创建 EnvoyProxy 与 GatewayClass（手册 8.3）：EnvoyProxy 名 `envoy-proxy-external`、GatewayClass 名 `envoy-gateway-external`（决策 #52 生产命名，弃用 `proxy-ext`/`eg` 缩写；刻意避开 chart 自有对象名 `envoy-gateway`——那是 ClusterRole/Deployment/Service/ServiceAccount 的名字，helm release 名 `eg` 也不改，因为它会拼进 `eg-gateway-helm-*` RBAC 名）。数据面 2 副本、镜像 `envoyproxy/envoy:distroless-v1.37.1`、Service 类型 LoadBalancer、`externalTrafficPolicy: Cluster`、地址池 `pool-ext`、固定 IP 为 `gw_ext_ip`。四个对象名（含 Gateway 与跳转路由）都是 role defaults 的单一事实源，模板与 kubectl 命令同源取值，集群可在 group_vars 覆盖；MetalLB 池名 `pool-ext` 不在本 role 边界内，未一并改。
   5. **创建 TLS Secret**（`gw_tls_enabled` 为 true 时）：
      - 校验证书与私钥匹配（公钥指纹相同），并拦已过期或临近过期的证书：剩余有效期不足 `gw_tls_min_valid_days`（role 默认 30 天，设 0 只拦已过期）即中止——否则要等客户端 HTTPS 报证书错误才发现；
      - 把证书与私钥写到 master01 的内存目录（`/dev/shm`）下的临时文件，权限 0600，任务 `diff: false`（内容只在 `--diff` 模式回显，报错信息保持可见，见 §3 敏感信息）；
      - 用 `kubectl create secret tls … --dry-run | kubectl apply` 创建，Secret 名为 `gw_tls_secret`、命名空间为 `envoy-gateway-system`；
      - 无论成功失败，**都要删除临时文件**。
-  6. 创建 Gateway `gw-ext`：监听器 `http`（80）；启用 TLS 时增加监听器 `https`（443，TLS 终止，引用上面的 Secret）；两个监听器的 `allowedRoutes` 都是 `from: All`（风险接受项，多团队共用集群时应改为按标签选择）。
+  6. 创建 Gateway `gateway-external`（`gw_gateway_name`）：监听器 `http`（80）；启用 TLS 时增加监听器 `https`（443，TLS 终止，引用上面的 Secret）；两个监听器的 `allowedRoutes` 都是 `from: All`（风险接受项，多团队共用集群时应改为按标签选择）。
   7. **可选 HTTP 跳转**（`gw_http_redirect` 为 true 才创建，默认 false）：创建挂在 `http` 监听器上的路由，把请求 301 跳转到 https。注意它会接管 80 上所有未被其他路由匹配的请求。
 - **验证**：
-  - `gw-ext` 的 `Programmed` 为 True，每个监听器也是；
+  - `gateway-external` 的 `Programmed` 为 True，每个监听器也是；
   - Envoy 的 Service 的外网 IP 等于 `gw_ext_ip`（最多等约 2.5 分钟），端口包含 80 与 443；
   - 数据面 Deployment 的镜像都以 `${REGISTRY}` 开头。
 - **注意**：证书若来自企业内部 CA，外网客户端必须信任该 CA，这是交付侧的前置条件。

@@ -40,7 +40,7 @@ ka_ext_advert_int: 1
 ## MetalLB（L2）与业务入口
 metallb_ext_range: 10.200.0.210-10.200.0.219   # 须避开节点外网 IP 与 ext_vip
 gw_ext_ip: 10.200.0.210                # 须在 metallb_ext_range 内
-gw_tls_secret: gw-ext-tls
+gw_tls_secret: gateway-external-tls   # 决策 #52：随资源对象一并弃用缩写
 gw_http_redirect: false                 # true 时创建 80→443 的 301 跳转（接管 80 未匹配流量）
 
 ## kubeadm

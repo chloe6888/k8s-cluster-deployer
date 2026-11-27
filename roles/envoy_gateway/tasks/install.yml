@@ -138,9 +138,9 @@
 
     # 手册 8.3：Accepted 之后 8.4 的 Gateway 才会被受理；operator 刚起来时 CRD 对象
     # 尚未受理，轮询等待（约 150 秒：30 次 × 5 秒）
-    - name: Wait for the eg GatewayClass to be Accepted
+    - name: Wait for the GatewayClass to be Accepted
       ansible.builtin.command:
-        cmd: kubectl get gatewayclass eg
+        cmd: kubectl get gatewayclass {{ gw_gatewayclass_name }}
       register: gw_gc
       until: gw_gc.stdout is search('True')
       retries: 30
@@ -240,13 +240,13 @@
     - name: Remove the leftover http-to-https when redirect is disabled
       when: not ((gw_http_redirect | bool) and (gw_tls_enabled | bool))
       ansible.builtin.command:
-        cmd: kubectl -n envoy-gateway-system delete httproute http-to-https --ignore-not-found
+        cmd: kubectl -n envoy-gateway-system delete httproute {{ gw_redirect_route_name }} --ignore-not-found
       register: gw_redirect_del
       changed_when: "'deleted' in gw_redirect_del.stdout"
 
     # 手册 8.4④：流程门禁，Programmed 之后 Service 才拿到地址池 IP
     - name: Wait for the Gateway to be Programmed
       ansible.builtin.command:
-        cmd: kubectl -n envoy-gateway-system wait --for=condition=Programmed gateway/gw-ext --timeout=5m
+        cmd: kubectl -n envoy-gateway-system wait --for=condition=Programmed gateway/{{ gw_gateway_name }} --timeout=5m
       changed_when: false
       check_mode: false

@@ -270,10 +270,12 @@
             verify_cluster_failures: "{{ verify_cluster_failures + ['IPPool 异常（期望 Always 25 true）: ' ~ (vf_ippool.stdout | trim | default('缺失'))] }}"
           run_once: true
 
+        # 对象名单一事实源在 envoy_gateway role defaults（决策 #52 生产命名）；
+        # 本 role 是只读验收镜像，若集群覆盖了名字需同步此处
         - name: Check Gateway PROGRAMMED and EXTERNAL-IP
           ansible.builtin.shell:
             cmd: |
-              kubectl -n envoy-gateway-system get gateway gw-ext --no-headers
+              kubectl -n envoy-gateway-system get gateway gateway-external --no-headers
               kubectl -n envoy-gateway-system get svc --no-headers
           delegate_to: "{{ groups['masters'][0] }}"
           run_once: true
