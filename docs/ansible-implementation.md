@@ -186,18 +186,18 @@ k8s-cluster-deployer/
 - **主机**：全部节点，并行。
 - **步骤**：
   1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。
-  2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。
-  3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
+  2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。清单单一事实源在 role 的 `defaults/main.yml`（`os_modules_load`，决策 #46），片段文件、立即加载、verify 共用。
+  3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。期望值单一事实源在 `os_sysctl_expect`（决策 #46），模板与 verify 共用。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：
      - 只装 `nftables` 命令行工具，不使用它的服务；
      - 安装后立即 `disable` + `stop` + `mask`（决策 #36）：不启动、不开机启动、防误启动；
      - 原因：该服务 start / reload / stop 都会执行 `nft flush ruleset`，清空 kube-proxy、Calico 和主机防火墙的全部规则；mask 之后无法被误启动；
      - 任何阶段都禁止 `nft flush ruleset`。
   5. **关闭 swap**：有 swap 就 `swapoff -a`，并注释 `/etc/fstab` 里 `/swap.img` 那一行。
-  6. **DNS**：确认 `/run/systemd/resolve/resolv.conf` 存在；不存在就安装并启动 `systemd-resolved`。
+  6. **DNS**：无条件保证 `systemd-resolved` 已安装且 active（决策 #46：原"文件不存在才装"把"没装"与"装了没起"混为一谈——包已装时 apt 无变化、服务继续躺着，kubelet 会读到 127.0.0.53 stub 回环）。
   7. **时间同步**：安装 chrony（会自动卸载 timesyncd，属预期）；配置里只写 `ntp_servers` 每个地址一行 `server … iburst`，不配 `allow` 与 `local`；其余参数同手册 2.7；启动并设为开机启动。
-  8. **journald**：写入容量限制配置（`SystemMaxUse` 取 `journald_system_max_use`，默认 4G），重启 journald。
-- **验证**：9 项 sysctl 与手册一致；swap 为 0；`nftables` 为 masked 且 inactive；`chronyc sources` 至少有一个可用源（初次同步最多等 2 分钟）；Harbor 域名可解析。
+  8. **journald**：先确保 `/etc/systemd/journald.conf.d` 存在（原装 Ubuntu 24.04 不带该目录，template 不建父目录，决策 #46），写入容量限制配置（`SystemMaxUse` 取 `journald_system_max_use`，默认 4G），重启 journald。
+- **验证**：9 项 sysctl 与手册一致（逐项迭代内比较，期望值同 `os_sysctl_expect`）；swap 为 0；`nftables` 为 masked 且 inactive（排序后整体相等，缺行必拦）；`systemd-resolved` active 且 `/run` 上游文件含真实 nameserver（无 127.0.0.53）；`chronyc sources` 至少有一个可用源（初次同步最多等 2 分钟）；Harbor 域名可解析。
 - **注意**：第一次执行有配置变更属正常，第二次必须没有变更。
 
 ### 6.3 阶段 11：固定内核（单独执行）

@@ -1,0 +1,22 @@
+---
+# 单一事实源（决策 #46）：内核模块与 sysctl 清单只写这一处，
+# modules-load.d 片段、立即加载、sysctl 模板与 verify 共用。
+# 此前同一清单抄 4 处（两个文件内容 + 立即加载 loop + handler loop），
+# sysctl 9 项抄 3 处且 verify 按 results[0..8] 位置对位——#40 ④ 的
+# "期望值恒不相等"正是这种结构的产物。
+# 键=modules-load.d 文件名（2.2 k8s.conf / 2.3 nftables.conf），值=模块列表
+os_modules_load:
+  k8s.conf: [overlay, br_netfilter, ipip]
+  nftables.conf: [nf_tables, nf_nat, nf_conntrack]
+
+# 手册 2.2 全部 9 项；rp_filter 显式写入防加固基线改回 1，勿因与默认重复而删
+os_sysctl_expect:
+  net.bridge.bridge-nf-call-ip6tables: "1"
+  net.bridge.bridge-nf-call-iptables: "1"
+  net.ipv4.ip_forward: "1"
+  net.ipv4.ip_nonlocal_bind: "1"
+  net.ipv4.conf.all.rp_filter: "2"
+  net.ipv4.conf.default.rp_filter: "2"
+  fs.inotify.max_user_instances: "8192"
+  fs.inotify.max_user_watches: "1048576"
+  fs.inotify.max_queued_events: "65536"

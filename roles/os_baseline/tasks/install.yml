@@ -27,37 +27,28 @@
         cmd: getent hosts {{ harbor.split(':')[0] }}
       register: os_harbor_check
       changed_when: false
-      failed_when: os_harbor_check.rc != 0
       check_mode: false
 
-    # 手册 2.2
-    - name: Persist the k8s.conf module list (overlay / br_netfilter / ipip)
+    # 手册 2.2/2.3：开机加载清单，单一事实源 os_modules_load（决策 #46：
+    # 原先同一清单写 4 处——两个文件内容、立即加载 loop、handler loop）
+    - name: Persist the modules-load.d fragments
       ansible.builtin.copy:
-        dest: /etc/modules-load.d/k8s.conf
+        dest: "/etc/modules-load.d/{{ item.key }}"
+        content: "{{ item.value | join(nl) }}{{ nl }}"
         mode: "0644"
-        content: |
-          overlay
-          br_netfilter
-          ipip
-      notify: Reload kernel modules
+      vars:
+        nl: "\n"
+      loop: "{{ os_modules_load | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
 
-    # 手册 2.3
-    - name: Persist the nftables.conf module list (nf_tables / nf_nat / nf_conntrack)
-      ansible.builtin.copy:
-        dest: /etc/modules-load.d/nftables.conf
-        mode: "0644"
-        content: |
-          nf_tables
-          nf_nat
-          nf_conntrack
-      notify: Reload kernel modules
-
-    # 手册 2.2/2.3：立即加载，不等重启
+    # 手册 2.2/2.3：立即加载，不等重启。modprobe 幂等、每次全量执行，
+    # 原先为此挂的 Reload kernel modules handler 属纯冗余（决策 #46 删）
     - name: Load kernel modules immediately
       community.general.modprobe:
         name: "{{ item }}"
         state: present
-      loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
+      loop: "{{ os_modules_load.values() | flatten }}"
 
     # 手册 2.2：rp_filter 显式写入，防加固基线把 2 改回 1，勿因与默认重复而删除
     - name: Write the nine sysctl parameters
@@ -119,18 +110,21 @@
         regexp: '^(?![ \t]*#)([ \t]*\S+[ \t]+\S+[ \t]+swap[ \t].*)$'
         replace: '#\1'
 
-    # 手册 2.6
-    - name: Check systemd-resolved upstream files
-      ansible.builtin.stat:
-        path: /run/systemd/resolve/resolv.conf
-      register: os_resolv_conf
-
-    - name: Install and start systemd-resolved when missing
-      when: not os_resolv_conf.stat.exists
+    # 手册 2.6（决策 #46）：无条件保证包与服务。原判据"/run/.../resolv.conf
+    # 存在才装"把"没装"与"装了没起"混为一谈——包已装时 apt 无变化、notify
+    # 不触发，服务继续躺着；resolved 不 active 时 kubeadm 不会把 kubelet 的
+    # resolvConf 指向 /run 上游文件，CoreDNS 会读到 127.0.0.53 stub 回环。
+    # 两个模块都幂等；started 拉起时自动重生成 /run 文件，无需 restart handler
+    - name: Ensure systemd-resolved is installed
       ansible.builtin.apt:
         name: systemd-resolved
         state: present
-      notify: Restart systemd-resolved
+
+    - name: Start and enable systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: started
+        enabled: true
 
     # 手册 2.7：自动卸载 timesyncd 属预期
     - name: Install chrony
@@ -145,6 +139,14 @@
         dest: /etc/chrony/chrony.conf
         mode: "0644"
       notify: Restart chrony
+
+    # 手册 2.8：原装 Ubuntu 24.04 不带 /etc/systemd/journald.conf.d（dpkg 只装
+    # /usr/lib 下 vendor 目录，实测），template 不建父目录——先确保目录存在
+    - name: Ensure the journald drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: "0755"
 
     # 手册 2.8
     - name: Write the journald size limit

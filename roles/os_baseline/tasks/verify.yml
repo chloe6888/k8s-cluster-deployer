@@ -1,43 +1,24 @@
 ---
-# 只读核对基线终态（手册 2.2/2.3/2.4/2.7）。
+# 只读核对基线终态（手册 2.2/2.3/2.4/2.6/2.7）。
 - name: Verify the OS baseline
   tags: [os, verify]
   block:
-    # gather 发生在应用 sysctl 之前，故不用 facts 而是现读
-    - name: Read current sysctl values
+    # 手册 2.2：gather 发生在应用 sysctl 之前，故不用 facts 而是现读。
+    # 期望值取单一事实源 os_sysctl_expect（决策 #46），迭代内自比较
+    # （#42 教训①：loop 的 failed_when 只见当前迭代结果，不做 results[N]
+    # 位置对位——旧结构两份清单按位置对齐，正是 #40 ④ 误判的根源）
+    - name: Verify the nine sysctl values match the manual
       ansible.builtin.command:
         cmd: sysctl -n {{ item.key }}
-      loop: "{{ sysctl_expect | dict2items }}"
+      loop: "{{ os_sysctl_expect | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
       register: os_sysctl_read
       changed_when: false
+      failed_when: >-
+        os_sysctl_read.rc != 0
+        or (os_sysctl_read.stdout | trim) != item.value
       check_mode: false
-      vars:
-        sysctl_expect:
-          net.bridge.bridge-nf-call-ip6tables: "1"
-          net.bridge.bridge-nf-call-iptables: "1"
-          net.ipv4.ip_forward: "1"
-          net.ipv4.ip_nonlocal_bind: "1"
-          net.ipv4.conf.all.rp_filter: "2"
-          net.ipv4.conf.default.rp_filter: "2"
-          fs.inotify.max_user_instances: "8192"
-          fs.inotify.max_user_watches: "1048576"
-          fs.inotify.max_queued_events: "65536"
-
-    - name: Verify the nine sysctl values match the manual
-      ansible.builtin.assert:
-        that: "{{ sysctl_expect | dict2items | map(attribute='value') | list }}"
-        quiet: true
-      vars:
-        sysctl_expect:
-          net.bridge.bridge-nf-call-ip6tables: "{{ os_sysctl_read.results[0].stdout | trim == '1' }}"
-          net.bridge.bridge-nf-call-iptables: "{{ os_sysctl_read.results[1].stdout | trim == '1' }}"
-          net.ipv4.ip_forward: "{{ os_sysctl_read.results[2].stdout | trim == '1' }}"
-          net.ipv4.ip_nonlocal_bind: "{{ os_sysctl_read.results[3].stdout | trim == '1' }}"
-          net.ipv4.conf.all.rp_filter: "{{ os_sysctl_read.results[4].stdout | trim == '2' }}"
-          net.ipv4.conf.default.rp_filter: "{{ os_sysctl_read.results[5].stdout | trim == '2' }}"
-          fs.inotify.max_user_instances: "{{ os_sysctl_read.results[6].stdout | trim == '8192' }}"
-          fs.inotify.max_user_watches: "{{ os_sysctl_read.results[7].stdout | trim == '1048576' }}"
-          fs.inotify.max_queued_events: "{{ os_sysctl_read.results[8].stdout | trim == '65536' }}"
 
     - name: Verify swap is disabled
       ansible.builtin.command:
@@ -52,9 +33,30 @@
         cmd: systemctl show -p UnitFileState -p ActiveState nftables
       register: os_nft_state
       changed_when: false
-      # systemctl show 不保证 -p 参数的输出顺序（不同主机 ActiveState 与
-      # UnitFileState 先后不定，用户实测顺序相反即炸），逐行匹配不比顺序
-      failed_when: (os_nft_state.stdout_lines | difference(['UnitFileState=masked', 'ActiveState=inactive'])) | length > 0
+      # systemctl show 不保证 -p 参数的输出顺序（#42：用户实测顺序相反），
+      # 且逐行 difference 只保证单边包含——缺一行也放行（实测单输出
+      # ActiveState=inactive 即过）。排序后整体相等：顺序无关、缺行必拦
+      failed_when: (os_nft_state.stdout_lines | sort) != (['UnitFileState=masked', 'ActiveState=inactive'] | sort)
+      check_mode: false
+
+    # 手册 2.6（决策 #46）：resolved 必须 active，且 /run 上游文件里有真实
+    # nameserver——kubelet 的 resolvConf 将指向该文件，读到 127.0.0.53
+    # stub（resolved 死着）就是 CoreDNS 上游回环
+    - name: Verify systemd-resolved is active
+      ansible.builtin.command:
+        cmd: systemctl is-active systemd-resolved
+      register: os_resolved_active
+      changed_when: false
+      failed_when: (os_resolved_active.stdout | trim) != 'active'
+      check_mode: false
+
+    - name: Verify the resolved upstream resolv.conf has real nameservers
+      ansible.builtin.command:
+        cmd: grep ^nameserver /run/systemd/resolve/resolv.conf
+      register: os_resolved_ns
+      changed_when: false
+      # 文件缺失/无 nameserver 行都会 rc!=0；出现 127.0.0.53 说明拿到的是 stub
+      failed_when: os_resolved_ns.rc != 0 or '127.0.0.53' in os_resolved_ns.stdout
       check_mode: false
 
     # 初次同步最多等 2 分钟（24 次 × 5 秒）；先确认有输出再匹配已同步源（^\*）

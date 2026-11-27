@@ -1,16 +1,6 @@
 ---
-- name: Reload kernel modules
-  community.general.modprobe:
-    name: "{{ item }}"
-    state: present
-  loop: [overlay, br_netfilter, ipip, nf_tables, nf_nat, nf_conntrack]
-
-- name: Restart systemd-resolved
-  ansible.builtin.systemd:
-    name: systemd-resolved
-    state: restarted
-    enabled: true
-
+# 决策 #46：删除 Reload kernel modules（立即加载每次无条件执行，handler 纯冗余）
+# 与 Restart systemd-resolved（改为无条件 systemd: started，拉起即重生成 /run 文件）
 - name: Restart chrony
   ansible.builtin.systemd:
     name: chrony
