@@ -185,7 +185,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 2 章（除内核固定外）。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。
+  1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。探测与判定分为两步（#47）：`getent` 任务 `failed_when: false` 只采集，紧随的 `assert` 带上"解析到了什么/期望什么/常见原因（/etc/hosts 缺条目、Ubuntu 默认 127.0.1.1 回环行、解析到外网 IP）"的可操作报错。
   2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。清单单一事实源在 role 的 `defaults/main.yml`（`os_modules_load`，决策 #46），片段文件、立即加载、verify 共用。
   3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。期望值单一事实源在 `os_sysctl_expect`（决策 #46），模板与 verify 共用。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：

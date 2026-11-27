@@ -7,8 +7,10 @@
     # 本工程不代改不代写，只核对。每个节点名必须解析到该节点的内网 IP
     # （etcd peer 与 apiserver 直连都按节点名寻址，解析缺失/解析到外网 IP
     # 会在 kubeadm 阶段才炸，这里提前拦下）。
-    # 用 ahostsv4 而非 hosts：后者可能优先返回 IPv6（实测 localhost 返回 ::1）
-    - name: Verify each node name resolves to its internal IP
+    # 用 ahostsv4 而非 hosts：后者可能优先返回 IPv6（实测 localhost 返回 ::1）。
+    # 探测与判定分开（#47）：failed_when 只能让任务红、说不出原因，
+    # assert 才能带上期望值与常见原因
+    - name: Resolve every node name
       ansible.builtin.command:
         cmd: getent ahostsv4 {{ item }}
       loop: "{{ groups['k8s_all'] }}"
@@ -16,18 +18,42 @@
         label: "{{ item }}"
       register: os_node_resolve
       changed_when: false
-      failed_when: >-
-        os_node_resolve.rc != 0
-        or (os_node_resolve.stdout.split()[0] | default('')) != hostvars[item]['node_ip']
+      failed_when: false
       check_mode: false
 
-    # 手册 2.1：节点名核对后，确认 Harbor 域名也可解析（镜像预取依赖）
-    - name: Verify Harbor hostname resolution
+    # 最常见的失败是 Ubuntu 默认的 "127.0.1.1 <主机名>" 行把本机名解析到回环
+    - name: Verify each node name resolves to its internal IP
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout.split()[0] == hostvars[item.item]['node_ip']
+        quiet: true
+        fail_msg: >-
+          节点名 {{ item.item }} 解析到 {{ item.stdout.split()[0] if item.stdout else '（无法解析）' }}，
+          期望内网 IP {{ hostvars[item.item]['node_ip'] }}。常见原因：/etc/hosts 缺条目；
+          保留了 Ubuntu 默认的 127.0.1.1 行（本机名被解析到回环）；或节点名解析到了外网 IP。
+          本工程不代写 /etc/hosts（决策 #45），请在节点侧修正后重跑。
+      loop: "{{ os_node_resolve.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # 手册 2.1：节点名核对后，确认 Harbor 域名也可解析（镜像预取依赖）。
+    # 同 #47 探测/判定分开，报错能指明这是镜像仓库域名解析失败
+    - name: Resolve the Harbor hostname
       ansible.builtin.command:
         cmd: getent hosts {{ harbor.split(':')[0] }}
-      register: os_harbor_check
+      register: os_harbor_resolve
       changed_when: false
+      failed_when: false
       check_mode: false
+
+    - name: Verify the Harbor hostname resolves
+      ansible.builtin.assert:
+        that: os_harbor_resolve.rc == 0
+        quiet: true
+        fail_msg: >-
+          Harbor 域名 {{ harbor.split(':')[0] }} 无法解析，后续镜像预取会失败。
+          请检查节点 DNS（systemd-resolved 上游）或 /etc/hosts 后重跑。
 
     # 手册 2.2/2.3：开机加载清单，单一事实源 os_modules_load（决策 #46：
     # 原先同一清单写 4 处——两个文件内容、立即加载 loop、handler loop）
@@ -130,6 +156,7 @@
       ansible.builtin.apt:
         name: chrony
         state: present
+        update_cache: false
 
     # 手册 2.7：仅 server 行，不配 allow/local
     - name: Write the chrony configuration
