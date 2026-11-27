@@ -168,13 +168,24 @@
       vars:
         artifact_file: "nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
 
-    # 手册 4.4
+    # 手册 4.4。决策 #50：同 containerd 的版本条件解压——不能加 creates:，
+    # 否则版本升级被旧二进制挡住。nerdctl --version 实测输出
+    # "nerdctl version 2.3.0, commit <hash>"（版本号后跟逗号），锚点结尾
+    # 取 ([\s,]|$)，与 containerd 的 (\s|$) 不同
+    - name: Check the nerdctl version
+      ansible.builtin.command:
+        cmd: nerdctl --version
+      register: runtime_nerdctl_ver
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
     - name: Extract nerdctl to /usr/local/bin
+      when: runtime_nerdctl_ver.stdout is not search('(^|\s)v?' ~ (nerdctl_version | regex_escape) ~ '([\s,]|$)')
       ansible.builtin.unarchive:
         src: "{{ package_dir }}/nerdctl-{{ nerdctl_version }}-linux-amd64.tar.gz"
         dest: /usr/local/bin
         remote_src: true
-        creates: /usr/local/bin/nerdctl
 
     # 手册 4.4
     - name: Start and enable containerd

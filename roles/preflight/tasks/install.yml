@@ -16,6 +16,22 @@
           （实际 {{ ansible_distribution }} {{ ansible_distribution_version }} {{ ansible_architecture }}，uid={{ ansible_user_uid | default('未知') }}）
         quiet: true
 
+    # 决策 #50：预留合计超过节点容量时 kubelet 起不来（validateNodeAllocatable
+    # 直接报错，要到 kubeadm 阶段才暴露），预检提前拦。预留值与 init_master 模板
+    # 同源（config/versions.yml 的 kube_reserved/system_reserved）；内存另加 512Mi
+    # 余量给内核与 eviction 阈值呼吸空间
+    - name: Assert the node can cover the reserved cpu and memory
+      ansible.builtin.assert:
+        that:
+          - ansible_processor_vcpus | int >= (kube_reserved.cpu | int) + (system_reserved.cpu | int)
+          - ansible_memtotal_mb | int >= (kube_reserved.memory_mb | int) + (system_reserved.memory_mb | int) + 512
+        fail_msg: >-
+          {{ inventory_hostname }} 容量不足以覆盖 kubelet 预留：要求 ≥{{ (kube_reserved.cpu | int) + (system_reserved.cpu | int) }} 核 /
+          ≥{{ (kube_reserved.memory_mb | int) + (system_reserved.memory_mb | int) + 512 }} MiB（预留合计+512Mi 余量），
+          实际 {{ ansible_processor_vcpus }} 核 / {{ ansible_memtotal_mb }} MiB。
+          调小 config/versions.yml 的 kube_reserved/system_reserved，或换更大的节点
+        quiet: true
+
     # 克隆机的 machine-id / product_uuid 重复会导致 join 异常，必须在动手前拦下
     - name: Read machine-id and product_uuid
       ansible.builtin.command:
@@ -44,9 +60,13 @@
           逐台核对：{{ dict(node_name_list | zip(node_machine_id_list)) }}
         quiet: true
       vars:
-        node_machine_id_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_machine_id') | list }}"
-        node_product_uuid_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_product_uuid') | list }}"
-        node_name_list: "{{ groups['k8s_all'] | map('extract', hostvars, 'node_name') | list }}"
+        # 决策 #50：用 ansible_play_hosts 而非 groups['k8s_all']——--limit 运行时，
+        # 不在本次 play 里的主机从未执行上面的 set_fact，extract 其变量直接报
+        # 'HostVarsVars' has no attribute（实测复现）。本次实际执行的主机全部
+        # 已设值；全量运行时两者等价，唯一性语义不削弱
+        node_machine_id_list: "{{ ansible_play_hosts | map('extract', hostvars, 'node_machine_id') | list }}"
+        node_product_uuid_list: "{{ ansible_play_hosts | map('extract', hostvars, 'node_product_uuid') | list }}"
+        node_name_list: "{{ ansible_play_hosts | map('extract', hostvars, 'node_name') | list }}"
       run_once: true
 
     # 循环的 failed_when 在每次迭代求值，拿到的是当次结果（无 .results 聚合，
@@ -122,8 +142,38 @@
       changed_when: false
       check_mode: false
 
+    # 决策 #50：HA 层已存在（任一 master 的 keepalived 活跃）时 VIP 本就在本集群
+    # 某台 master 上，ping 必应答——reset 后（cni 已删、keepalived 默认保留）与
+    # 阶段 20-50 窗口（HA 已铺、Calico 未装）重跑都会误报"被其他主机占用"。
+    # 探测从控制机逐台委托执行，旗标 run_once 广播到批内全部主机（含 worker，
+    # 它们的 ping 同样会被合法持有者应答）。未铺 HA 时全部 inactive → 旗标为假
+    - name: Detect whether keepalived is active on any master
+      ansible.builtin.command:
+        cmd: systemctl is-active keepalived
+      loop: "{{ groups['masters'] }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: "{{ item }}"
+      run_once: true
+      register: preflight_keepalived_probe
+      changed_when: false
+      failed_when: false
+      # 整机不可达（关机/尚未部署）不让探测炸掉重跑：无 stdout 的结果
+      # 在下面的 selectattr 里自然被过滤掉
+      ignore_unreachable: true
+      check_mode: false
+
+    - name: Record whether the HA layer is already active
+      ansible.builtin.set_fact:
+        preflight_ha_active: >-
+          {{ preflight_keepalived_probe.results
+             | selectattr('stdout', 'defined')
+             | selectattr('stdout', 'equalto', 'active') | list | length > 0 }}
+      run_once: true
+
     # VIP 已被占用时 keepalived 起来会脑裂/抢主，动手前从每个节点探一次；
-    # 已装 Calico 的节点有 Pod 路由、且 VIP 本就在某台 master 上，探测必误报，跳过
+    # 已装 Calico（/etc/cni/net.d）或 HA 层已活跃的节点跳过——后者 VIP 在本集群
+    # 某台 master 上属预期应答，前者有 Pod 路由探测必误报
     - name: Ping both VIPs to detect squatters
       ansible.builtin.command:
         cmd: ping -c 1 -W 2 {{ item }}
@@ -134,7 +184,9 @@
       failed_when: false
       changed_when: false
       check_mode: false
-      when: not preflight_cni_dir.stat.exists
+      when:
+        - not preflight_cni_dir.stat.exists
+        - not (preflight_ha_active | bool)
 
     - name: Assert neither VIP answers
       ansible.builtin.assert:
@@ -146,7 +198,9 @@
       loop: "{{ preflight_vip_ping.results | default([]) | selectattr('rc', 'defined') | list }}"
       loop_control:
         label: "{{ item.item }}"
-      when: not preflight_cni_dir.stat.exists
+      when:
+        - not preflight_cni_dir.stat.exists
+        - not (preflight_ha_active | bool)
 
     # 手册 1.4：已装 Calico 的节点跳过，避免 Pod 路由误报（同一豁免）
     - name: Check CIDR conflicts

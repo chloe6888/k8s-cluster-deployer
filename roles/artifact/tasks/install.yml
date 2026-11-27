@@ -42,37 +42,49 @@
           loop_control:
             label: "{{ item }}"
 
-        # 决策 #25：仓库清单条目是 artifacts/ 内相对路径（无前缀）。清单一次全量校验，
-        # --ignore-missing 会把缺失文件静默当通过，所以必须再断言每个映射文件的
-        # "<相对路径>: OK" 确实在输出里；templates/ 下的映射（如 containerd.service）
-        # 不在清单内，跳过
-        - name: Verify against the repository SHA256SUMS
+        # 决策 #50：按文件两步校验，替代整份清单 --ignore-missing 全量校验。
+        # ① 旧断言行 "expr ~ ': OK' in stdout_lines" 未整体加引号，": " 被 YAML
+        #   当映射分隔符拆成单键字典——解析器实证从未求值、恒真通过，
+        #   --ignore-missing 的静默放行从未被兜住；
+        # ② 整份清单一次校验：任一无关文件损坏会连坐全部取包失败，报错还指向
+        #   第一个请求的文件（篡改 metallb chart 报 containerd 的实测案例）。
+        # 新法：grep -F 取该文件的清单行（缺失或多条都在第一步拦下，
+        # 报"清单里应有且仅有一条"），再把这一行喂给 sha256sum -c - 只校验
+        # 本次请求的文件。templates/ 下的映射（如 containerd.service）不在清单内，跳过
+        - name: Fetch the manifest line of each requested file
           ansible.builtin.command:
-            cmd: sha256sum -c --ignore-missing checksums/SHA256SUMS
+            cmd: grep -F -- {{ (artifact_repo_map[item] | regex_replace('^artifacts/', '')) | quote }} checksums/SHA256SUMS
           args:
             chdir: "{{ playbook_dir }}/../artifacts"
           delegate_to: localhost
           run_once: true
-          register: artifact_repo_verify
-          changed_when: false
-          failed_when: false
-          check_mode: false
-
-        - name: Assert every mapped file passed verification
-          ansible.builtin.assert:
-            that:
-              - artifact_repo_verify.rc == 0
-              - (artifact_repo_map[item] | regex_replace('^artifacts/', '')) ~ ': OK' in artifact_repo_verify.stdout_lines
-            fail_msg: >-
-              {{ item }}（{{ artifact_repo_map[item] }}）未通过校验：
-              artifacts/checksums/SHA256SUMS 的 OK 行里没有它。
-              sha256sum -c 输出：{{ artifact_repo_verify.stdout_lines | default([]) | join('；') }}
-            quiet: true
           loop: "{{ artifact_list }}"
           loop_control:
             label: "{{ item }}"
           when: artifact_repo_map[item] is match('^artifacts/')
+          register: artifact_manifest_line
+          changed_when: false
+          failed_when: >-
+            artifact_manifest_line.rc != 0
+            or (artifact_manifest_line.stdout_lines | default([]) | length) != 1
+          check_mode: false
+
+        - name: Verify each requested file against its manifest line
+          ansible.builtin.command:
+            cmd: sha256sum -c -
+            stdin: "{{ item.stdout }}"
+          args:
+            chdir: "{{ playbook_dir }}/../artifacts"
+          delegate_to: localhost
           run_once: true
+          loop: "{{ artifact_manifest_line.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          # 上一步被 when 跳过的映射项（templates/ 路径）没有 stdout 键
+          when: item.stdout is defined
+          register: artifact_file_verify
+          changed_when: false
+          check_mode: false
 
         - name: Push files to the node
           ansible.builtin.copy:

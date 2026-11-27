@@ -14,3 +14,12 @@ metallb_version: "0.15.3"
 metallb_frr_image_tag: "10.4.1"      # speaker FRR sidecar，tag 随 chart 默认
 envoy_gateway_version: "1.7.1"
 envoy_proxy_image_tag: "distroless-v1.37.1"
+# kubelet 预留（决策 #50 变量化，原先硬编码在 init_master 模板）。对所有节点生效
+# （kubelet-config CM 下发）。注意：每台节点容量必须 ≥ 两组预留之和，节点侧
+# preflight 会断言 vCPU/内存并预留 512Mi 余量，改这里要同步评估最小节点规格
+kube_reserved:
+  cpu: 4
+  memory_mb: 4096
+system_reserved:
+  cpu: 2
+  memory_mb: 2048

@@ -57,8 +57,8 @@ apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 cgroupDriver: systemd
 maxPods: 110
-kubeReserved:    { cpu: "4", memory: 4Gi }
-systemReserved:  { cpu: "2", memory: 2Gi }
+kubeReserved:    { cpu: "{{ kube_reserved.cpu }}", memory: "{{ kube_reserved.memory_mb }}Mi" }
+systemReserved:  { cpu: "{{ system_reserved.cpu }}", memory: "{{ system_reserved.memory_mb }}Mi" }
 enforceNodeAllocatable: [pods]
 evictionHard:
   memory.available: "5%"

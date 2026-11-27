@@ -8,6 +8,14 @@
       ansible.builtin.set_fact:
         node_name: "{{ inventory_hostname }}"
 
+    # 决策 #50：reset.yml 等独立 playbook 用 gather_facts: false，主机名断言需要
+    # min facts（ansible_hostname）。常规 play 已收集过则跳过，无额外开销；
+    # 缺了这一步，单独执行 reset 必报 'ansible_hostname' is undefined
+    - name: Gather minimum facts when the play skipped fact collection
+      when: ansible_hostname is not defined
+      ansible.builtin.setup:
+        gather_subset: min
+
     # 决策 #44：不再代改主机名，改为一致性门禁——系统 hostname 与 inventory 不符时
     # kubelet 的注册名会和 kubeadm nodeRegistration.name 分叉，这里尽早拦下让用户二选一修正
     - name: Assert the system hostname matches the inventory name

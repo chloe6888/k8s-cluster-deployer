@@ -102,7 +102,7 @@ k8s-cluster-deployer/
 | deb 包 | Kubernetes 源与系统包都在内网 apt 站 | 内网 apt 站 |
 | Harbor CA | 集群专属，不入仓库；仅私有 CA 签发的 Harbor 需要（决策 #41） | `harbor_use_private_ca: true` 时放在控制机上该集群的 `files/harbor-ca.crt`；公网可信 CA 签发则保持 false，不建 certs.d |
 
-校验方式：控制机对 `artifacts/checksums/SHA256SUMS` 全量校验（仓库相对路径，决策 #25），逐文件断言 `: OK` 后再经 `copy` 推送；`copy` 幂等，重跑只推变化的文件。校验失败就停止，不会继续安装。`Release.key` 另外还要核对 sha256 与 GPG 指纹。**节点上不得访问公网**。
+校验方式（决策 #50：按文件两步）：控制机对**本次请求的每个文件**，先用 `grep -F` 从 `artifacts/checksums/SHA256SUMS` 取出该文件的清单行（取不到或多于一条都中止——缺失与重复在第一步拦下），再把这一行喂给 `sha256sum -c -` 单独校验，通过后才经 `copy` 推送；`copy` 幂等，重跑只推变化的文件。任一文件校验失败就停止，不会继续安装（旧的整份清单 `--ignore-missing` 全量校验有两个已证缺陷：无关文件损坏连坐全部取包失败、报错指向第一个请求的文件；配套的 `': OK' in stdout_lines` 断言因 YAML 把冒号拆成单键字典而从未求值）。`Release.key` 另外还要核对 sha256 与 GPG 指纹。**节点上不得访问公网**。
 
 ### 3.4 Inventory
 
@@ -172,11 +172,13 @@ k8s-cluster-deployer/
 - **步骤**：
   1. 确认系统是 Ubuntu 24.04、x86_64，且以 root 登录。
   2. 检查手册 1.3 中必填的变量都已填写，列表类变量不为空。
-  3. 检查取值：`cluster_prefix` 全小写；`vip_port` 不是 6443；`ka_auth_pass` 不超过 8 位；`vip` 与 `ext_vip` 不相同；`gw_ext_ip` 必须在 `metallb_ext_range` 内；内网 VIP 在 `node_cidr` 内，外网 VIP 与 `ext_iface` 同网段；三台 master 的 `ka_state/ka_priority` 分别为 MASTER/100、BACKUP/90、BACKUP/80。
-  4. 检查唯一性：全部节点的 `machine-id`、`product_uuid`、`node_ip`、`node_name` 互不相同（克隆机最容易重复，重复会导致 join 异常）。
-  5. 检查网卡与路由（手册 2.1）：`node_iface`、`ext_iface` 存在；`node_ip` 在 `node_iface` 上；默认路由只有一条且在 `ext_iface` 上；Harbor 域名能解析，且访问 Harbor 的路由走 `node_iface`。
-  6. 检查系统包能装：`apt-get update` 成功，`haproxy`、`keepalived`、`socat`、`chrony`、`nftables`、`gnupg` 在内网 apt 站都有候选版本。
-  7. 网段冲突检查（手册 1.4）：用一个只依赖 Python 标准库 `ipaddress` 的脚本，检查 Pod、Service 网段与路由表、`node_cidr`、`extra_nets` 是否重叠。**只在尚未安装 Calico 的节点上执行**（判据为 `/etc/cni/net.d` 不存在；早期用 `tunl0` 判断已被 #42 纠正——`ipip` 模块在阶段 10 就加载，`tunl0` 随之出现，会把之后的重跑全部误豁免）。
+  3. 检查取值：`cluster_prefix` 全小写；`vip_port` 不是 6443；`ka_auth_pass` 不超过 8 位；`vip` 与 `ext_vip` 不相同；`ka_vrid`/`ka_ext_vrid` 为 1-255 的整数且互不相同（决策 #50：越界值原先要到阶段 20 才被 `keepalived -t` 拒绝）；`gw_ext_ip` 必须在 `metallb_ext_range` 内；内网 VIP 在 `node_cidr` 内，外网 VIP 与 `ext_iface` 同网段；三台 master 的 `ka_state/ka_priority` 分别为 MASTER/100、BACKUP/90、BACKUP/80。
+  4. 检查唯一性：全部节点的 `machine-id`、`product_uuid`、`node_ip`、`node_name` 互不相同（克隆机最容易重复，重复会导致 join 异常）。唯一性遍历用 `ansible_play_hosts`（决策 #50：`groups[...] | map('extract', hostvars, ...)` 会触到不在本次 play 内的主机，任何 `--limit` 运行必炸）。
+  5. 检查节点容量（决策 #50）：`ansible_processor_vcpus`、`ansible_memtotal_mb` 能覆盖预留合计（`kube_reserved` + `system_reserved`，取值在 `config/versions.yml`）外加 512Mi 余量——不足即中止，避免 kubelet 起来后才因 OOM/CPU 争抢出问题。
+  6. 检查网卡与路由（手册 2.1）：`node_iface`、`ext_iface` 存在；`node_ip` 在 `node_iface` 上；默认路由只有一条且在 `ext_iface` 上；Harbor 域名能解析，且访问 Harbor 的路由走 `node_iface`。
+  7. 检查系统包能装：`apt-get update` 成功，`haproxy`、`keepalived`、`socat`、`chrony`、`nftables`、`gnupg` 在内网 apt 站都有候选版本。
+  8. 网段冲突检查（手册 1.4）：用一个只依赖 Python 标准库 `ipaddress` 的脚本，检查 Pod、Service 网段与路由表、`node_cidr`、`extra_nets` 是否重叠。**只在尚未安装 Calico 的节点上执行**（判据为 `/etc/cni/net.d` 不存在；早期用 `tunl0` 判断已被 #42 纠正——`ipip` 模块在阶段 10 就加载，`tunl0` 随之出现，会把之后的重跑全部误豁免）。
+  9. 双 VIP 占用探测：对两个 VIP 各 ping 一次，有应答即中止（防与存量地址冲突）。**仅在未铺 HA 时执行**（决策 #50：先探测各 master 的 keepalived 是否 active，任一台 active 即视为 HA 已铺、合法持有 VIP，跳过本探测——否则阶段 20 之后从 site.yml 顶层重跑会被自己的 VIP 持有者拦下；探测容忍整机不可达，无输出的结果自然过滤）。
 - **验证**：所有检查通过，且重复执行不产生任何变更。
 - **注意**：任何一项失败都应直接中止并指出是哪台节点、哪个变量，不要尝试自动修复。
 
@@ -185,7 +187,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 2 章（除内核固定外）。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。探测与判定分为两步（#47）：`getent` 任务 `failed_when: false` 只采集，紧随的 `assert` 带上"解析到了什么/期望什么/常见原因（/etc/hosts 缺条目、Ubuntu 默认 127.0.1.1 回环行、解析到外网 IP）"的可操作报错。
+  1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。探测与判定分为两步（#47）：`getent` 任务 `failed_when: false` 只采集，紧随的 `assert` 带上"解析到了什么/期望什么/常见原因（/etc/hosts 缺条目、Ubuntu 默认 127.0.1.1 回环行、解析到外网 IP）"的可操作报错。解析统一用 `getent ahostsv4`（决策 #50：Harbor 配置写成裸 IP 时 `getent hosts` rc=2 必误拦，`ahostsv4` 对 IP 与域名都正常；节点名解析用 `ahostsv4` 还有避开 IPv6 优先返回的原因，见 #47 前的实测）。
   2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。清单单一事实源在 role 的 `defaults/main.yml`（`os_modules_load`，决策 #46），片段文件、立即加载、verify 共用。
   3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。期望值单一事实源在 `os_sysctl_expect`（决策 #46），模板与 verify 共用。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：
@@ -248,7 +250,7 @@ k8s-cluster-deployer/
   2. **生成配置**：只在 `config.toml` 不存在时执行 `containerd config default`。然后做三处修改：sandbox 镜像改成 `${REGISTRY}/google_containers/pause:3.10.2`（与 kubeadm 的 `imageRepository` 同路径，决策 #4）；`SystemdCgroup` 改为 true；registry 的 `config_path` 设为 `/etc/containerd/certs.d`（修订点 4；2.x 的 default 输出是单引号，且 transfer 段也有 `config_path` 键，替换必须锚定 registry 段头，不能按 `"config_path = \"\"` 字面匹配）。修改后用 `containerd config dump` 逐项确认，**任何一项不符就停止**（手册 4.2 注明 2.3.0 的键位待验证，以实测为准；实测通过后，把这份配置固化成模板，以后用模板生成）。三处替换与解压安装都挂 `Restart containerd` 通知，flush 点在 Harbor 访问配置之前（后续 hosts.toml 依赖运行态）。
   3. **Harbor 访问**（修订点 4，决策 #41）：`harbor_use_private_ca` 为 true 时，对 Harbor 以及 `app_registry`（不为空且主机不同）的主机，建 `/etc/containerd/certs.d/<主机>/`，放入 Harbor CA，写 `hosts.toml`（`server` 为 https，`capabilities` 为 pull 与 resolve，`ca` 指向该目录里的 CA）。为 false（默认，Harbor 证书是公网可信 CA 签发）则整段跳过，containerd 走系统信任链。生产环境不使用 `skip_verify`。
   4. **runc 1.4.2**：获取并校验 `runc.amd64` 与 `runc.sha256sum`；卸载 apt 版 runc；安装到 `/usr/local/sbin/runc`；变更后重启 containerd。
-  5. **nerdctl 2.3.0**：获取并校验压缩包，解压到 `/usr/local/bin`。
+  5. **nerdctl 2.3.0**：获取并校验压缩包；当前版本不是 2.3.0 才解压到 `/usr/local/bin`（决策 #50，同 containerd 的版本条件安装——不能加 `creates:`，否则版本升级被旧二进制挡住；锚点结尾取 `([\s,]|$)`，因为 `nerdctl --version` 在版本号后跟逗号）。
   6. 启动 containerd 并设为开机启动。
   7. **镜像预检**（只在 master01 上执行一次）：用 `nerdctl --namespace k8s.io` 逐个拉取下列镜像，**任何一个失败都中止**并列出缺失的镜像：
      - `google_containers/pause:3.10.2`、`tigera/operator:v1.42.6`；
@@ -278,7 +280,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册 5.4、5.5、5.7。
 - **主机**：master01。
 - **步骤**：
-  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`（决策 #48：ext_vip 不进 SAN）；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
+  1. **渲染 kubeadm 配置**：内容同手册 5.4，并应用修订点 2、5、6、7、8：`certSANs` 含内网 VIP、各 master 内网 IP 与节点名、`localhost`、`127.0.0.1` 及 `extra_cert_sans`（决策 #48：ext_vip 不进 SAN）；`etcd` 放进 `ClusterConfiguration`；`taints: []`（master 可调度）；网段与 `nodePortAddresses` 用变量；`criSocket` 用 `/run/...`；`imageRepository` 为 `${REGISTRY}/google_containers`；`kubeReserved`/`systemReserved` 取 `config/versions.yml` 的 `kube_reserved`/`system_reserved`（决策 #50 变量化，与阶段 00 的容量预检同源）；叶子与 CA 有效期均 `175200h`；node-ip 不在此设置（见 6.6 第 4 步）。配置文件权限 0600。
   2. 用 `kubeadm config validate` 校验配置，不通过就停止。
   3. 只在集群尚未初始化时执行（判据：apiserver 中不存在 `kube-system/kubeadm-config`；不用 `admin.conf` 是否存在来判断，因为 init 中途失败也会留下它）：先确认 `vip:vip_port` 可连，再 `kubeadm config images pull`，再 `kubeadm init --config`，命令自动重试 2 次、间隔 30s（决策 #49：静态 Pod 冷启动+HAProxy 后端转绿可能超过 kubeadm 内部 ~60s bootstrap 超时，该失败模式下 init 可重入、证书复用，重试自愈慢启动）。不加 `--upload-certs`，join 凭据由 6.8 每台现生成；init 输出不屏蔽，失败时能直接看到原因。
   4. 把 `admin.conf` 复制到 `~/.kube/config`，权限 0600。

@@ -38,10 +38,12 @@
         label: "{{ item.item }}"
 
     # 手册 2.1：节点名核对后，确认 Harbor 域名也可解析（镜像预取依赖）。
-    # 同 #47 探测/判定分开，报错能指明这是镜像仓库域名解析失败
+    # 同 #47 探测/判定分开，报错能指明这是镜像仓库域名解析失败。
+    # ahostsv4 而非 hosts（决策 #50）：harbor 写成裸 IP 时 getent hosts rc=2 必误拦
+    # （实测），ahostsv4 对 IP 与域名都正常，与 preflight 的写法统一
     - name: Resolve the Harbor hostname
       ansible.builtin.command:
-        cmd: getent hosts {{ harbor.split(':')[0] }}
+        cmd: getent ahostsv4 {{ harbor.split(':')[0] }}
       register: os_harbor_resolve
       changed_when: false
       failed_when: false

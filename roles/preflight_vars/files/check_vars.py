@@ -81,6 +81,18 @@ for k in ("stats_user", "stats_pass"):
 # 两个 VIP 不同、且分别落在各自网段
 if vip is not None and ext_vip is not None and vip == ext_vip:
     bad("vip 与 ext_vip 不得相同")
+
+# VRID 1-255 整数且互异（决策 #50：越界值要到阶段 20 才被 keepalived -t 拒绝，
+# 0/256/300 此前都能通过变量预检）
+for k in ("ka_vrid", "ka_ext_vrid"):
+    v = V.get(k)
+    if v is None:
+        bad(f"{k} 未定义")
+    elif isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= 255):
+        bad(f"{k} 须为 1-255 的整数（VRRP VRID 范围）: {v!r}")
+vr, ve = V.get("ka_vrid"), V.get("ka_ext_vrid")
+if isinstance(vr, int) and isinstance(ve, int) and vr == ve:
+    bad("ka_vrid 与 ka_ext_vrid 不得相同")
 if vip is not None and node_cidr is not None and vip not in node_cidr:
     bad(f"内网 vip {vip} 不在 node_cidr {node_cidr} 内（手册 1.3）")
 ext_prefix = V.get("ext_vip_prefix") or 24

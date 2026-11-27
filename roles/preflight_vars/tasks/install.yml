@@ -39,6 +39,11 @@
           ext_vip: "{{ ext_vip }}"
           ext_vip_prefix: "{{ ext_vip_prefix | default(24) }}"
           vip_port: "{{ vip_port }}"
+          # 决策 #50：必须裸引用——带任何 filter（含 default）都会把 int 渲染成
+          # 字符串，check_vars 的 isinstance(v, int) 会误拦合法值（实测）。
+          # 未定义时由上面的 banner 任务先报错
+          ka_vrid: "{{ ka_vrid }}"
+          ka_ext_vrid: "{{ ka_ext_vrid }}"
           ka_auth_pass: "{{ ka_auth_pass | default(None) }}"
           stats_user: "{{ stats_user | default('') }}"
           stats_pass: "{{ stats_pass | default('') }}"

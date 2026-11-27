@@ -33,7 +33,7 @@ ext_vip_prefix: 24
 vip_port: 16443                         # haproxy 与 apiserver 同机时不能是 6443
 extra_cert_sans: []                     # apiserver 证书附加 SAN（DNS 名或 IP，如前置 NGINX/负载均衡地址）
 ka_vrid: 61                             # 二层内唯一，部署前 tcpdump vrrp 人工确认
-ka_ext_vrid: 61
+ka_ext_vrid: 62                         # 决策 #50：内外网 VRID 互异（四真实集群同此约定）
 ka_advert_int: 1                        # 修订点 13：内外网统一 1
 ka_ext_advert_int: 1
 
