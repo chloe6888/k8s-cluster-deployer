@@ -110,17 +110,16 @@
         regexp: '^(?![ \t]*#)([ \t]*\S+[ \t]+\S+[ \t]+swap[ \t].*)$'
         replace: '#\1'
 
-    # 手册 2.6（决策 #46）：无条件保证包与服务。原判据"/run/.../resolv.conf
-    # 存在才装"把"没装"与"装了没起"混为一谈——包已装时 apt 无变化、notify
-    # 不触发，服务继续躺着；resolved 不 active 时 kubeadm 不会把 kubelet 的
-    # resolvConf 指向 /run 上游文件，CoreDNS 会读到 127.0.0.53 stub 回环。
-    # 两个模块都幂等；started 拉起时自动重生成 /run 文件，无需 restart handler
-    - name: Ensure systemd-resolved is installed
-      ansible.builtin.apt:
-        name: systemd-resolved
-        state: present
-
-    - name: Start and enable systemd-resolved
+    # 手册 2.6（决策 #46，勘误见下）：无条件保证服务处于 started+enabled。
+    # 原判据"/run/.../resolv.conf 存在才装"把"没装"与"装了没起"混为一谈；
+    # resolved 不 active 时 kubeadm 不会把 kubelet 的 resolvConf 指向 /run
+    # 上游文件，CoreDNS 会读到 127.0.0.53 stub 回环。
+    # 勘误：不装包（手册 2.6 的 apt 行本就是注释掉的备选）——24.04 的
+    # resolved 随基础系统就位（实测 cqjf/test 节点均在跑），要防的只有
+    # "装了没起"；而 apt 任务在索引不含该包名的节点（test 实测，离线/
+    # 受限镜像）必炸——装包引入了本不存在的故障面。started 拉起时自动
+    # 重生成 /run 文件，无需 restart handler
+    - name: Ensure systemd-resolved is started and enabled
       ansible.builtin.systemd:
         name: systemd-resolved
         state: started

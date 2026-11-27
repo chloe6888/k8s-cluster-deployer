@@ -194,7 +194,7 @@ k8s-cluster-deployer/
      - 原因：该服务 start / reload / stop 都会执行 `nft flush ruleset`，清空 kube-proxy、Calico 和主机防火墙的全部规则；mask 之后无法被误启动；
      - 任何阶段都禁止 `nft flush ruleset`。
   5. **关闭 swap**：有 swap 就 `swapoff -a`，并注释 `/etc/fstab` 里 `/swap.img` 那一行。
-  6. **DNS**：无条件保证 `systemd-resolved` 已安装且 active（决策 #46：原"文件不存在才装"把"没装"与"装了没起"混为一谈——包已装时 apt 无变化、服务继续躺着，kubelet 会读到 127.0.0.53 stub 回环）。
+  6. **DNS**：无条件保证 `systemd-resolved` 服务 started+enabled（决策 #46 及勘误：要防的是"装了没起"——resolved 不 active 时 kubelet 会读到 127.0.0.53 stub 回环；24.04 的包随基础系统就位，故不做 apt 装包——离线/受限镜像节点的 apt 索引可能不含该包名，test 实测报 No package matching）。
   7. **时间同步**：安装 chrony（会自动卸载 timesyncd，属预期）；配置里只写 `ntp_servers` 每个地址一行 `server … iburst`，不配 `allow` 与 `local`；其余参数同手册 2.7；启动并设为开机启动。
   8. **journald**：先确保 `/etc/systemd/journald.conf.d` 存在（原装 Ubuntu 24.04 不带该目录，template 不建父目录，决策 #46），写入容量限制配置（`SystemMaxUse` 取 `journald_system_max_use`，默认 4G），重启 journald。
 - **验证**：9 项 sysctl 与手册一致（逐项迭代内比较，期望值同 `os_sysctl_expect`）；swap 为 0；`nftables` 为 masked 且 inactive（排序后整体相等，缺行必拦）；`systemd-resolved` active 且 `/run` 上游文件含真实 nameserver（无 127.0.0.53）；`chronyc sources` 至少有一个可用源（初次同步最多等 2 分钟）；Harbor 域名可解析。
