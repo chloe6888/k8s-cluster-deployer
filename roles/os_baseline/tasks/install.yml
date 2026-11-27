@@ -3,21 +3,23 @@
 - name: Apply the OS baseline
   tags: [os]
   block:
-    # 手册 2.1（决策 #44）：主机名在节点创建阶段已配置，本工程不代改；
-    # 与 inventory 的一致性由 common 的断言把关。
-    # 受管区块写入全部节点的 内网IP 主机名。
-    # 坑（决策 #40）：join('\n') 的单引号 \n 是字面量，必须用双引号变量装真换行；
-    # 节点名即 inventory 主机名（node_ip 是 inventory 变量，始终可取，不依赖 hostvars）
-    - name: Write the managed /etc/hosts block (all nodes, internal IP, node name)
-      ansible.builtin.blockinfile:
-        path: /etc/hosts
-        marker: "# {mark} k8s-cluster-deployer managed"
-        block: "{{ hosts_lines }}"
-      vars:
-        nl: "\n"
-        hosts_lines: >-
-          {{ groups['k8s_all'] | map('extract', hostvars, 'node_ip')
-             | zip(groups['k8s_all']) | map('join', ' ') | join(nl) }}
+    # 手册 2.1（决策 #44/#45）：主机名与 /etc/hosts 均在节点创建阶段配置好，
+    # 本工程不代改不代写，只核对。每个节点名必须解析到该节点的内网 IP
+    # （etcd peer 与 apiserver 直连都按节点名寻址，解析缺失/解析到外网 IP
+    # 会在 kubeadm 阶段才炸，这里提前拦下）。
+    # 用 ahostsv4 而非 hosts：后者可能优先返回 IPv6（实测 localhost 返回 ::1）
+    - name: Verify each node name resolves to its internal IP
+      ansible.builtin.command:
+        cmd: getent ahostsv4 {{ item }}
+      loop: "{{ groups['k8s_all'] }}"
+      loop_control:
+        label: "{{ item }}"
+      register: os_node_resolve
+      changed_when: false
+      failed_when: >-
+        os_node_resolve.rc != 0
+        or (os_node_resolve.stdout.split()[0] | default('')) != hostvars[item]['node_ip']
+      check_mode: false
 
     # 手册 2.1：/etc/hosts 写完立刻确认 Harbor 域名可解析
     - name: Verify Harbor hostname resolution

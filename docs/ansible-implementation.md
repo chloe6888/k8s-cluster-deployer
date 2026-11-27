@@ -185,7 +185,7 @@ k8s-cluster-deployer/
 - **目标**：落实手册第 2 章（除内核固定外）。
 - **主机**：全部节点，并行。
 - **步骤**：
-  1. **解析**：主机名不代改（决策 #44，节点创建阶段已配置，一致性由 `common` 断言把关）；把所有节点（`node_ip` 与 `node_name`）写入 `/etc/hosts` 的受管区块；确认 Harbor 域名可解析。
+  1. **解析**：主机名与 `/etc/hosts` 不代改不代写（决策 #44/#45，节点创建阶段统一配置）；核对每个节点名解析到其内网 IP、Harbor 域名可解析，不符即中止。
   2. **内核模块**：写入开机加载清单（`overlay`、`br_netfilter`、`ipip`，以及 `nf_tables`、`nf_nat`、`nf_conntrack`），并立即加载。
   3. **sysctl**：写入手册 2.2 的 9 项参数（含 `ip_nonlocal_bind=1`、`rp_filter=2`、三项 inotify），写入后执行 `sysctl --system`。`rp_filter` 即使与系统默认值重复也要写入，不能省略（防止加固基线改回 1）。
   4. **nftables**（手册 2.3，这一步最容易出事，单独说明）：
