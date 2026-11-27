@@ -21,7 +21,7 @@
         or (os_node_resolve.stdout.split()[0] | default('')) != hostvars[item]['node_ip']
       check_mode: false
 
-    # 手册 2.1：/etc/hosts 写完立刻确认 Harbor 域名可解析
+    # 手册 2.1：节点名核对后，确认 Harbor 域名也可解析（镜像预取依赖）
     - name: Verify Harbor hostname resolution
       ansible.builtin.command:
         cmd: getent hosts {{ harbor.split(':')[0] }}
